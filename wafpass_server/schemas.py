@@ -59,6 +59,7 @@ class RunCreate(BaseModel):
     source_paths: list[str] = Field(default_factory=list)
     controls_meta: list[ControlMetaSchema] = Field(default_factory=list)
     findings: list[FindingSchema] = Field(default_factory=list)
+    plan_changes: dict[str, Any] | None = None
 
 
 class RunSummary(BaseModel):
@@ -83,5 +84,6 @@ class RunDetail(RunSummary):
     detected_regions: list[list[str]]
     source_paths: list[str]
     controls_meta: list[dict[str, Any]]
+    plan_changes: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}

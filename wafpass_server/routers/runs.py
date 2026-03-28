@@ -35,6 +35,7 @@ async def create_run(
         detected_regions=payload.detected_regions,
         source_paths=payload.source_paths,
         controls_meta=[c.model_dump() for c in payload.controls_meta],
+        plan_changes=payload.plan_changes,
     )
     db.add(run)
     await db.commit()

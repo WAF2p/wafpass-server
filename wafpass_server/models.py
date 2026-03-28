@@ -33,4 +33,5 @@ class Run(Base):
     detected_regions: Mapped[list] = mapped_column(JSONB, default=list)
     source_paths: Mapped[list] = mapped_column(JSONB, default=list)
     controls_meta: Mapped[list] = mapped_column(JSONB, default=list)
+    plan_changes: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
