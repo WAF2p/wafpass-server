@@ -1,13 +1,4 @@
-"""Pydantic schemas for the API layer.
-
-The result schema (FindingSchema, WafpassResultSchema) is the contract
-owned by wafpass-core. The types below mirror that schema exactly.
-
-Once wafpass-core is installed as a dependency, replace the local
-definitions with:
-
-    from wafpass.schema import FindingSchema, WafpassResultSchema
-"""
+"""Pydantic schemas for the API layer."""
 from __future__ import annotations
 
 import uuid
@@ -30,9 +21,29 @@ class FindingSchema(BaseModel):
     example: dict[str, Any] | None = None
 
 
+class ControlCheckMetaSchema(BaseModel):
+    id: str
+    title: str
+    severity: str
+    remediation: str = ""
+    example: dict[str, Any] | None = None
+
+
+class ControlMetaSchema(BaseModel):
+    id: str
+    title: str
+    pillar: str
+    severity: str
+    category: str = ""
+    description: str = ""
+    rationale: str = ""
+    threat: list[str] = Field(default_factory=list)
+    regulatory_mapping: list[dict[str, Any]] = Field(default_factory=list)
+    checks: list[ControlCheckMetaSchema] = Field(default_factory=list)
+
+
 class RunCreate(BaseModel):
     """Payload accepted by POST /runs — matches wafpass-result.json schema."""
-
     schema_version: str = "1.0"
     project: str = ""
     branch: str = ""
@@ -46,6 +57,7 @@ class RunCreate(BaseModel):
     controls_run: int = 0
     detected_regions: list[list[str]] = Field(default_factory=list)
     source_paths: list[str] = Field(default_factory=list)
+    controls_meta: list[ControlMetaSchema] = Field(default_factory=list)
     findings: list[FindingSchema] = Field(default_factory=list)
 
 
@@ -58,6 +70,9 @@ class RunSummary(BaseModel):
     iac_framework: str
     score: int
     pillar_scores: dict[str, int]
+    path: str
+    controls_loaded: int
+    controls_run: int
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -65,5 +80,8 @@ class RunSummary(BaseModel):
 
 class RunDetail(RunSummary):
     findings: list[dict[str, Any]]
+    detected_regions: list[list[str]]
+    source_paths: list[str]
+    controls_meta: list[dict[str, Any]]
 
     model_config = {"from_attributes": True}

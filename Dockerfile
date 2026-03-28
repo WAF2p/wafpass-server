@@ -7,10 +7,10 @@ RUN pip install --no-cache-dir hatchling build
 COPY pyproject.toml VERSION README.md ./
 COPY wafpass_server/ wafpass_server/
 COPY alembic/ alembic/
-COPY alembic.ini ./
+COPY alembic.ini entrypoint.sh ./
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir . && chmod +x entrypoint.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "wafpass_server.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["./entrypoint.sh"]
