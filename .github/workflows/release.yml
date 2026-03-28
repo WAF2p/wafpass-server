@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute version
+        id: ver
+        run: |
+          BASE=$(cat VERSION | tr -d '[:space:]')
+          echo "Base version: $BASE"
+
+          LATEST=$(git tag -l "v${BASE}.*" | sort -V | tail -1)
+          echo "Latest matching tag: ${LATEST:-none}"
+
+          if [ -z "$LATEST" ]; then
+            PATCH=0
+          else
+            PATCH=$(echo "$LATEST" | sed "s/v${BASE}\.//")
+            PATCH=$((PATCH + 1))
+          fi
+
+          FULL="${BASE}.${PATCH}"
+          TAG="v${FULL}"
+          echo "New version: $TAG"
+
+          echo "full=${FULL}" >> $GITHUB_OUTPUT
+          echo "tag=${TAG}"   >> $GITHUB_OUTPUT
+
+      - name: Bump version in pyproject.toml
+        run: |
+          VER="${{ steps.ver.outputs.full }}"
+          sed -i "s/^version = \".*\"/version = \"${VER}\"/" pyproject.toml
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build
+        run: python -m build
+
+      - name: Install package + test deps
+        run: pip install ".[dev]"
+
+      - name: Test
+        run: pytest
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name:              ${{ steps.ver.outputs.tag }}
+          name:                  WAF++ PASS Server ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
