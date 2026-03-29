@@ -3,9 +3,29 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+# Re-export control schema types from wafpass-core so callers only need one import.
+from wafpass.control_schema import WizardCheck, WizardControl  # noqa: F401
+
+# ── Generic response envelope ─────────────────────────────────────────────────
+
+T = TypeVar("T")
+
+
+class Meta(BaseModel):
+    total: int | None = None
+    page: int | None = None
+    per_page: int | None = None
+
+
+class Envelope(BaseModel, Generic[T]):
+    """Consistent API response wrapper used by all /controls endpoints."""
+
+    data: T
+    meta: Meta = Field(default_factory=Meta)
 
 
 class FindingSchema(BaseModel):
@@ -87,3 +107,30 @@ class RunDetail(RunSummary):
     plan_changes: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}
+
+
+# ── Control schemas ───────────────────────────────────────────────────────────
+
+
+class ControlIn(WizardControl):
+    """Request body for POST /controls.
+
+    Extends WizardControl (from wafpass-core) with an optional ``source``
+    field indicating the authoring origin.
+    """
+
+    source: str = "wafpass"
+
+
+class ControlOut(WizardControl):
+    """Response schema for /controls endpoints.
+
+    Extends WizardControl with server-managed timestamp fields.
+    ``from_attributes=True`` enables construction from SQLAlchemy ORM rows.
+    """
+
+    source: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

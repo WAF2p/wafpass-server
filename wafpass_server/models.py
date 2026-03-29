@@ -15,6 +15,20 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class Control(Base):
+    __tablename__ = "controls"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    pillar: Mapped[str] = mapped_column(Text, default="")
+    severity: Mapped[str] = mapped_column(Text, default="")
+    type: Mapped[list] = mapped_column(JSONB, default=list)
+    description: Mapped[str] = mapped_column(Text, default="")
+    checks: Mapped[list] = mapped_column(JSONB, default=list)
+    source: Mapped[str] = mapped_column(Text, default="wafpass")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Run(Base):
     __tablename__ = "runs"
 

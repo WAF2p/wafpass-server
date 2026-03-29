@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from wafpass_server.config import settings
+from wafpass_server.routers.controls import router as controls_router
 from wafpass_server.routers.runs import router as runs_router
 
 app = FastAPI(
@@ -14,6 +15,10 @@ app = FastAPI(
     description="REST API for persisting and querying WAF++ PASS scan results.",
     docs_url="/api/docs",
     redoc_url="/api/redoc",
+    openapi_tags=[
+        {"name": "runs", "description": "Scan run results ingestion and retrieval."},
+        {"name": "controls", "description": "WAF++ control catalogue management."},
+    ],
 )
 
 app.add_middleware(
@@ -25,9 +30,10 @@ app.add_middleware(
 )
 
 app.include_router(runs_router)
+app.include_router(controls_router)
 
 
-@app.get("/health")
+@app.get("/health", tags=["health"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
