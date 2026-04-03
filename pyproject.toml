@@ -8,7 +8,10 @@ version = "0.3.0"
 description = "WAF++ PASS – API server for persisting and querying scan results"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+]
 dependencies = [
     "fastapi>=0.100",
     "uvicorn[standard]>=0.23",
