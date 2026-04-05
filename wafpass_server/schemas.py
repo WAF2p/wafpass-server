@@ -28,6 +28,16 @@ class Envelope(BaseModel, Generic[T]):
     meta: Meta = Field(default_factory=Meta)
 
 
+class SecretFindingSchema(BaseModel):
+    file: str
+    line_no: int
+    pattern_name: str
+    severity: str
+    matched_key: str
+    masked_value: str
+    suppressed: bool = False
+
+
 class FindingSchema(BaseModel):
     check_id: str
     check_title: str
@@ -79,6 +89,7 @@ class RunCreate(BaseModel):
     source_paths: list[str] = Field(default_factory=list)
     controls_meta: list[ControlMetaSchema] = Field(default_factory=list)
     findings: list[FindingSchema] = Field(default_factory=list)
+    secret_findings: list[SecretFindingSchema] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
 
 
@@ -104,6 +115,7 @@ class RunDetail(RunSummary):
     detected_regions: list[list[str]]
     source_paths: list[str]
     controls_meta: list[dict[str, Any]]
+    secret_findings: list[dict[str, Any]] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}
