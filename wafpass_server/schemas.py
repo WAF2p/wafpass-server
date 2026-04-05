@@ -72,6 +72,60 @@ class ControlMetaSchema(BaseModel):
     checks: list[ControlCheckMetaSchema] = Field(default_factory=list)
 
 
+class WaiverUpsert(BaseModel):
+    reason: str = ""
+    owner: str = ""
+    expires: str = ""
+    project: str = ""
+
+
+class WaiverOut(BaseModel):
+    id: str
+    reason: str
+    owner: str
+    expires: str
+    project: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiskAcceptanceUpsert(BaseModel):
+    reason: str = ""
+    approver: str = ""
+    owner: str = ""
+    rfc: str = ""
+    jira_link: str = ""
+    other_link: str = ""
+    notes: str = ""
+    risk_level: str = "accepted"
+    residual_risk: str = "medium"
+    expires: str = ""
+    accepted_at: str = ""
+    project: str = ""
+
+
+class RiskAcceptanceOut(BaseModel):
+    id: str
+    reason: str
+    approver: str
+    owner: str
+    rfc: str
+    jira_link: str
+    other_link: str
+    notes: str
+    risk_level: str
+    residual_risk: str
+    expires: str
+    accepted_at: str
+    project: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RunCreate(BaseModel):
     """Payload accepted by POST /runs — matches wafpass-result.json schema."""
     schema_version: str = "1.0"
