@@ -17,6 +17,15 @@ COPY wafpass-server/alembic.ini wafpass-server/entrypoint.sh ./
 
 RUN pip install --no-cache-dir . && chmod +x entrypoint.sh
 
+# Copy WAF++ control YAML files so the sandbox engine can find them.
+# The pass/ directory was already used to install wafpass-core above, but the
+# controls/ subdirectory is data (not Python code) and is not installed by pip.
+COPY pass/controls/ /app/controls/
+
+# Default controls path — override with WAFPASS_CONTROLS_DIR if you mount your
+# own controls volume (e.g. for custom/enterprise controls).
+ENV WAFPASS_CONTROLS_DIR=/app/controls
+
 EXPOSE 8000
 
 ENTRYPOINT ["./entrypoint.sh"]

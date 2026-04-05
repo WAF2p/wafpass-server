@@ -53,6 +53,9 @@ Community = "https://github.com/WAF2p"
 wafpass-server = "wafpass_server.main:start"
 
 [project.optional-dependencies]
+sandbox = [
+    "wafpass-core",
+]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",

@@ -9,6 +9,7 @@ from wafpass_server.config import settings
 from wafpass_server.routers.controls import router as controls_router
 from wafpass_server.routers.risks import router as risks_router
 from wafpass_server.routers.runs import router as runs_router
+from wafpass_server.routers.sandbox import router as sandbox_router
 from wafpass_server.routers.waivers import router as waivers_router
 
 app = FastAPI(
@@ -22,6 +23,7 @@ app = FastAPI(
         {"name": "controls", "description": "WAF++ control catalogue management."},
         {"name": "waivers", "description": "Team-shared waiver records."},
         {"name": "risks", "description": "Team-shared risk acceptance records."},
+        {"name": "sandbox", "description": "Run the real WAF++ engine against arbitrary HCL snippets."},
     ],
 )
 
@@ -37,6 +39,7 @@ app.include_router(runs_router)
 app.include_router(controls_router)
 app.include_router(waivers_router)
 app.include_router(risks_router)
+app.include_router(sandbox_router)
 
 
 @app.get("/health", tags=["health"])
