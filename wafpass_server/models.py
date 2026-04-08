@@ -29,6 +29,38 @@ class Control(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Waiver(Base):
+    __tablename__ = "waivers"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)  # control_id
+    reason: Mapped[str] = mapped_column(Text, default="")
+    owner: Mapped[str] = mapped_column(Text, default="")
+    expires: Mapped[str] = mapped_column(Text, default="")
+    project: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class RiskAcceptance(Base):
+    __tablename__ = "risk_acceptances"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)  # control_id or custom key
+    reason: Mapped[str] = mapped_column(Text, default="")
+    approver: Mapped[str] = mapped_column(Text, default="")
+    owner: Mapped[str] = mapped_column(Text, default="")
+    rfc: Mapped[str] = mapped_column(Text, default="")
+    jira_link: Mapped[str] = mapped_column(Text, default="")
+    other_link: Mapped[str] = mapped_column(Text, default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    risk_level: Mapped[str] = mapped_column(Text, default="accepted")
+    residual_risk: Mapped[str] = mapped_column(Text, default="medium")
+    expires: Mapped[str] = mapped_column(Text, default="")
+    accepted_at: Mapped[str] = mapped_column(Text, default="")
+    project: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class Run(Base):
     __tablename__ = "runs"
 
@@ -47,5 +79,6 @@ class Run(Base):
     detected_regions: Mapped[list] = mapped_column(JSONB, default=list)
     source_paths: Mapped[list] = mapped_column(JSONB, default=list)
     controls_meta: Mapped[list] = mapped_column(JSONB, default=list)
+    secret_findings: Mapped[list] = mapped_column(JSONB, default=list)
     plan_changes: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -7,7 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from wafpass_server.config import settings
 from wafpass_server.routers.controls import router as controls_router
+from wafpass_server.routers.risks import router as risks_router
 from wafpass_server.routers.runs import router as runs_router
+from wafpass_server.routers.sandbox import router as sandbox_router
+from wafpass_server.routers.waivers import router as waivers_router
 
 app = FastAPI(
     title="wafpass-server",
@@ -18,6 +21,9 @@ app = FastAPI(
     openapi_tags=[
         {"name": "runs", "description": "Scan run results ingestion and retrieval."},
         {"name": "controls", "description": "WAF++ control catalogue management."},
+        {"name": "waivers", "description": "Team-shared waiver records."},
+        {"name": "risks", "description": "Team-shared risk acceptance records."},
+        {"name": "sandbox", "description": "Run the real WAF++ engine against arbitrary HCL snippets."},
     ],
 )
 
@@ -31,6 +37,9 @@ app.add_middleware(
 
 app.include_router(runs_router)
 app.include_router(controls_router)
+app.include_router(waivers_router)
+app.include_router(risks_router)
+app.include_router(sandbox_router)
 
 
 @app.get("/health", tags=["health"])

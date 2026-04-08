@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.database import get_db
 from wafpass_server.models import Run
-from wafpass_server.schemas import ControlMetaSchema, FindingSchema, RunCreate, RunDetail, RunSummary
+from wafpass_server.schemas import ControlMetaSchema, FindingSchema, RunCreate, RunDetail, RunSummary, SecretFindingSchema
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -35,6 +35,7 @@ async def create_run(
         detected_regions=payload.detected_regions,
         source_paths=payload.source_paths,
         controls_meta=[c.model_dump() for c in payload.controls_meta],
+        secret_findings=[sf.model_dump() for sf in payload.secret_findings],
         plan_changes=payload.plan_changes,
     )
     db.add(run)

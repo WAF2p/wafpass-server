@@ -28,6 +28,16 @@ class Envelope(BaseModel, Generic[T]):
     meta: Meta = Field(default_factory=Meta)
 
 
+class SecretFindingSchema(BaseModel):
+    file: str
+    line_no: int
+    pattern_name: str
+    severity: str
+    matched_key: str
+    masked_value: str
+    suppressed: bool = False
+
+
 class FindingSchema(BaseModel):
     check_id: str
     check_title: str
@@ -62,6 +72,60 @@ class ControlMetaSchema(BaseModel):
     checks: list[ControlCheckMetaSchema] = Field(default_factory=list)
 
 
+class WaiverUpsert(BaseModel):
+    reason: str = ""
+    owner: str = ""
+    expires: str = ""
+    project: str = ""
+
+
+class WaiverOut(BaseModel):
+    id: str
+    reason: str
+    owner: str
+    expires: str
+    project: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RiskAcceptanceUpsert(BaseModel):
+    reason: str = ""
+    approver: str = ""
+    owner: str = ""
+    rfc: str = ""
+    jira_link: str = ""
+    other_link: str = ""
+    notes: str = ""
+    risk_level: str = "accepted"
+    residual_risk: str = "medium"
+    expires: str = ""
+    accepted_at: str = ""
+    project: str = ""
+
+
+class RiskAcceptanceOut(BaseModel):
+    id: str
+    reason: str
+    approver: str
+    owner: str
+    rfc: str
+    jira_link: str
+    other_link: str
+    notes: str
+    risk_level: str
+    residual_risk: str
+    expires: str
+    accepted_at: str
+    project: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RunCreate(BaseModel):
     """Payload accepted by POST /runs — matches wafpass-result.json schema."""
     schema_version: str = "1.0"
@@ -79,6 +143,7 @@ class RunCreate(BaseModel):
     source_paths: list[str] = Field(default_factory=list)
     controls_meta: list[ControlMetaSchema] = Field(default_factory=list)
     findings: list[FindingSchema] = Field(default_factory=list)
+    secret_findings: list[SecretFindingSchema] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
 
 
@@ -104,6 +169,7 @@ class RunDetail(RunSummary):
     detected_regions: list[list[str]]
     source_paths: list[str]
     controls_meta: list[dict[str, Any]]
+    secret_findings: list[dict[str, Any]] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}
