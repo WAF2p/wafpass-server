@@ -134,6 +134,15 @@ async def run_sandbox(payload: SandboxRequest) -> SandboxResponse:
 
     for cr in raw_results:
         if not cr.results:
+            out_results.append(SandboxControlResult(
+                control_id=cr.control.id,
+                control_title=cr.control.title,
+                pillar=cr.control.pillar,
+                severity=cr.control.severity,
+                status="SKIP",
+                check_results=[],
+            ))
+            total_skip += 1
             continue
 
         check_results: list[SandboxCheckResult] = [
