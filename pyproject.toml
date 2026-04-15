@@ -34,12 +34,13 @@ classifiers = [
 dependencies = [
     "fastapi>=0.100",
     "uvicorn[standard]>=0.23",
-    "sqlalchemy>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
     "asyncpg>=0.29",
     "alembic>=1.13",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
+    "wafpass-core>=0.4.0",
 ]
 
 [project.urls]
@@ -53,9 +54,6 @@ Community = "https://github.com/WAF2p"
 wafpass-server = "wafpass_server.main:start"
 
 [project.optional-dependencies]
-sandbox = [
-    "wafpass-core",
-]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
