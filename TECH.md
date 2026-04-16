@@ -261,6 +261,15 @@ settings = Settings()  # Module-level singleton, read once at startup
 
 All environment variables are read once at process start. There is no hot-reload of configuration.
 
+**`.env.example`** (in the `wafpass-server/` directory) documents all variables with their defaults and usage notes. Copy it to `.env` for local development:
+
+```bash
+cp .env.example .env
+export $(grep -v '^#' .env | xargs)
+```
+
+For Docker Compose, the root `.env.example` is used instead — docker compose reads `.env` from the monorepo root automatically.
+
 ---
 
 ## Alembic migrations
