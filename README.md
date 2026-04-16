@@ -31,6 +31,13 @@ docker compose up --build
 # Prerequisites: PostgreSQL running locally
 pip install -e ".[dev]"
 
+# Copy and edit the environment file
+cp .env.example .env
+# Edit .env — at minimum set DATABASE_URL to point at your local PostgreSQL instance
+
+# Export variables into your shell (or use direnv)
+export $(grep -v '^#' .env | xargs)
+
 # Apply database migrations
 alembic upgrade head
 
@@ -42,12 +49,16 @@ uvicorn wafpass_server.main:app --reload --port 8000
 
 ## Environment variables
 
+Copy `.env.example` to `.env` for local development — it contains all variables with documented defaults.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | — | PostgreSQL URL, e.g. `postgresql+asyncpg://user:pass@host/db` |
+| `DATABASE_URL` | — | PostgreSQL async DSN, e.g. `postgresql+asyncpg://user:pass@host:5432/db` |
 | `WAFPASS_ENV` | `local` | Environment tag (`local`, `staging`, `production`) |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed CORS origins |
 | `WAFPASS_CONTROLS_DIR` | `controls` | Path to WAF++ control YAML files (used by Sandbox endpoint) |
+
+> **Local dev tip:** When running the dashboard dev server alongside the API, add `http://localhost:5173` to `CORS_ORIGINS` so Vite's dev server can reach the API without CORS errors.
 
 ---
 
