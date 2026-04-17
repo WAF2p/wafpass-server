@@ -9,17 +9,26 @@ This document covers internal architecture, design decisions, technical debt, an
 ```
 wafpass-server/
 ├── wafpass_server/
-│   ├── main.py          # FastAPI app factory, middleware, router registration, /health
+│   ├── main.py          # FastAPI app factory, middleware, router registration, /health, startup seeding
 │   ├── config.py        # Settings via pydantic-settings (env var parsing)
 │   ├── database.py      # SQLAlchemy async engine + session factory
-│   ├── models.py        # ORM models: Run, Control, Waiver, RiskAcceptance
+│   ├── models.py        # ORM models: User, RefreshToken, Run, Control, Waiver, RiskAcceptance
 │   ├── schemas.py       # Pydantic request/response models
+│   ├── auth/
+│   │   ├── __init__.py
+│   │   ├── jwt_utils.py          # create_access_token, decode_access_token (HS256)
+│   │   ├── deps.py               # get_current_user, require_role(), require_ingest()
+│   │   └── providers/
+│   │       ├── base.py           # AuthProvider protocol + UserRecord dataclass
+│   │       └── local.py          # bcrypt verify via passlib (Phase 1)
 │   └── routers/
-│       ├── runs.py      # POST/GET /runs, /runs/{id}, /runs/{id}/findings, /runs/{id}/controls
-│       ├── controls.py  # CRUD /controls (catalogue management)
-│       ├── waivers.py   # PUT/GET/DELETE /waivers
-│       ├── risks.py     # PUT/GET/DELETE /risks
-│       └── sandbox.py   # POST /sandbox, GET /sandbox/status
+│       ├── auth.py      # POST/GET /auth/login, /refresh, /logout, /me, /users
+│       ├── runs.py      # POST/GET /runs (auth-gated)
+│       ├── controls.py  # CRUD /controls (auth-gated)
+│       ├── waivers.py   # PUT/GET/DELETE /waivers (auth-gated)
+│       ├── risks.py     # PUT/GET/DELETE /risks (auth-gated)
+│       ├── sandbox.py   # POST /sandbox, GET /sandbox/status (auth-gated)
+│       └── scan.py      # POST /scan, GET /scan/status (auth-gated)
 ├── alembic/
 │   ├── env.py           # Alembic environment (async-compatible)
 │   └── versions/
@@ -29,7 +38,9 @@ wafpass-server/
 │       ├── 0004_add_plan_changes.py
 │       ├── 0005_add_controls.py
 │       ├── 0006_add_secret_findings.py
-│       └── 0007_add_waivers_risks.py
+│       ├── 0007_add_waivers_risks.py
+│       ├── 0008_add_stage_to_runs.py
+│       └── 0009_add_auth_tables.py
 ├── alembic.ini
 ├── entrypoint.sh        # Runs migrations then starts uvicorn
 ├── Dockerfile
@@ -51,6 +62,11 @@ CORS middleware (CORSMiddleware)
     ▼
 FastAPI router (path matching, input validation via Pydantic)
     │
+    ▼
+Auth dependency (get_current_user / require_role / require_ingest)
+    │  ├─ HTTPBearer extracts token from Authorization header
+    │  ├─ PyJWT verifies signature + expiry
+    │  └─ User looked up from DB — 401/403 if invalid
     ▼
 Dependency injection: get_db() → AsyncSession
     │
@@ -95,7 +111,91 @@ Several large columns (`findings`, `controls_meta`, `secret_findings`, `plan_cha
 
 ---
 
+## Authentication architecture (`auth/`)
+
+### Token flow
+
+```
+Browser / CLI
+    │
+    │  POST /auth/login {username, password}
+    ▼
+auth/providers/local.py  ─── bcrypt verify ──▶  users table
+    │
+    │  success: issue tokens
+    ▼
+jwt_utils.py
+    ├─ create_access_token()  →  HS256 JWT (sub, username, role, exp)
+    └─ secrets.token_urlsafe()  →  opaque refresh token (stored hashed in refresh_tokens)
+    │
+    │  {access_token, refresh_token, user}
+    ▼
+Browser stores both in localStorage
+```
+
+### JWT claims
+
+```json
+{
+  "sub":      "user-uuid",
+  "username": "s.lewandowski",
+  "role":     "engineer",
+  "type":     "access",
+  "iat":      1234567890,
+  "exp":      1234571490
+}
+```
+
+### Role hierarchy
+
+```python
+ROLE_HIERARCHY = ["clevel", "ciso", "architect", "engineer"]
+```
+
+`require_role("ciso")` accepts any user with index ≥ 1 (ciso, architect, engineer).
+
+### Machine-to-machine (CI/CD)
+
+`require_ingest` on `POST /runs` and `POST /scan` accepts **either** a valid Bearer JWT **or** the `X-Api-Key` header matching `WAFPASS_API_KEY`. This lets `wafpass check --push` work from CI pipelines without a user account.
+
+### Provider abstraction
+
+`auth/providers/base.py` defines an `AuthProvider` Protocol. Phase 1 only ships `local.py` (bcrypt). Future phases add:
+- `ldap.py` — `ldap3` bind against Active Directory / Samba DC; AD group → role mapping
+- `oidc.py` — PKCE authorization code flow; works with Entra ID and Keycloak; group claim → role mapping
+
+The `POST /auth/login` handler dispatches to the provider configured via `WAFPASS_AUTH_PROVIDER` (default: `local`). JWT issuance is provider-agnostic.
+
+### Bootstrap admin seeding
+
+On startup, if `WAFPASS_ADMIN_PASSWORD` is set and the `users` table is empty, the server creates one admin user. This runs exactly once — subsequent restarts skip it because the table is no longer empty.
+
+---
+
 ## ORM models (`models.py`)
+
+### User / RefreshToken
+
+```
+users
+├── id             UUID   PK
+├── username       TEXT   UNIQUE NOT NULL
+├── display_name   TEXT
+├── role           TEXT   (clevel | ciso | architect | engineer)
+├── auth_provider  TEXT   (local | ldap | entra | keycloak)
+├── password_hash  TEXT   NULL for SSO users
+├── is_active      BOOL
+├── created_at     TIMESTAMPTZ
+└── updated_at     TIMESTAMPTZ
+
+refresh_tokens
+├── id             UUID   PK
+├── user_id        UUID   FK → users.id  ON DELETE CASCADE
+├── token_hash     TEXT   UNIQUE  (SHA-256 of raw token)
+├── expires_at     TIMESTAMPTZ
+├── revoked        BOOL
+└── created_at     TIMESTAMPTZ
+```
 
 ### Run
 
@@ -327,9 +427,13 @@ Filtering findings by `severity`, `pillar`, and `status` via `GET /runs/{id}/fin
 
 The runs router returns raw lists; the controls router wraps in `{data, meta}`. This should be unified but is a breaking API change.
 
-### No authentication
+### No OIDC / LDAP (Phase 2+)
 
-There is no authentication or authorisation. The API is designed for internal/team use behind a VPN or private network. Adding auth (API keys or OIDC) is the primary missing enterprise feature.
+Phase 1 ships local password auth only. The provider abstraction (`auth/providers/base.py`) is ready for LDAP and OIDC implementations. See the architectural RBAC notes in `wafpass-dashboard/TECH.md` for the Phase 2 / Phase 3 plan.
+
+### Refresh token rotation not yet implemented
+
+Currently a refresh token can be reused until it expires or is explicitly revoked via `POST /auth/logout`. Rotation (issue a new refresh token on every `/auth/refresh` call and revoke the old one) would improve security against stolen tokens.
 
 ### No pagination on runs list
 

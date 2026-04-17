@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from wafpass_server.auth.deps import require_role
 from wafpass_server.database import get_db
-from wafpass_server.models import Control, _now
+from wafpass_server.models import Control, User, _now
 from wafpass_server.schemas import ControlIn, ControlOut, Envelope, Meta
 
 router = APIRouter(prefix="/controls", tags=["controls"])
@@ -28,6 +29,7 @@ def _to_out(ctrl: Control) -> ControlOut:
 async def upsert_control(
     payload: ControlIn,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("architect"))],
 ) -> Envelope[ControlOut]:
     """Create or update a control (idempotent upsert on ``id``)."""
     ctrl = await db.get(Control, payload.id)
@@ -60,6 +62,7 @@ async def upsert_control(
 @router.get("", response_model=Envelope[list[ControlOut]])
 async def list_controls(
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("clevel"))],
     pillar: str | None = Query(default=None, description="Filter by pillar name."),
     severity: str | None = Query(default=None, description="Filter by severity level."),
     page: int = Query(default=1, ge=1, description="1-based page number."),
@@ -93,6 +96,7 @@ async def list_controls(
 async def get_control(
     control_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("clevel"))],
 ) -> Envelope[ControlOut]:
     """Return a single control by ID."""
     ctrl = await db.get(Control, control_id.upper())
@@ -108,6 +112,7 @@ async def get_control(
 async def delete_control(
     control_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("architect"))],
 ) -> None:
     """Remove a control by ID."""
     ctrl = await db.get(Control, control_id.upper())

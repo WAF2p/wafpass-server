@@ -19,15 +19,16 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from wafpass_server.auth.deps import require_ingest, require_role
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
-from wafpass_server.models import Run
+from wafpass_server.models import Run, User
 from wafpass_server.schemas import RunSummary
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -95,7 +96,9 @@ def _resolve_and_validate(raw: str) -> Path:
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 @router.get("/status")
-async def scan_status() -> dict:
+async def scan_status(
+    _: Annotated[User, Depends(require_role("clevel"))],
+) -> dict:
     """Check whether server-side scanning is available."""
     controls_dir = Path(settings.wafpass_controls_dir)
     base_raw = (settings.wafpass_scan_base_dir or "").strip()
@@ -112,6 +115,7 @@ async def scan_status() -> dict:
 async def trigger_scan(
     payload: ScanRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User | None, Depends(require_ingest)],
 ) -> Run:
     """Trigger a WAF++ scan on a server-side path and persist the result."""
 

@@ -41,6 +41,9 @@ dependencies = [
     "pydantic-settings>=2.0",
     "python-dotenv>=1.0",
     "wafpass-core>=0.4.0",
+    "bcrypt>=4.0",
+    "PyJWT>=2.8",
+    "python-multipart>=0.0.9",
 ]
 
 [project.urls]

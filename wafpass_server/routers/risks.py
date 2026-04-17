@@ -7,8 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from wafpass_server.auth.deps import require_role
 from wafpass_server.database import get_db
-from wafpass_server.models import RiskAcceptance
+from wafpass_server.models import RiskAcceptance, User
 from wafpass_server.schemas import RiskAcceptanceOut, RiskAcceptanceUpsert
 
 router = APIRouter(prefix="/risks", tags=["risks"])
@@ -17,6 +18,7 @@ router = APIRouter(prefix="/risks", tags=["risks"])
 @router.get("", response_model=list[RiskAcceptanceOut])
 async def list_risks(
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("clevel"))],
     project: str | None = Query(default=None),
 ) -> list[RiskAcceptance]:
     stmt = select(RiskAcceptance).order_by(RiskAcceptance.id)
@@ -31,6 +33,7 @@ async def upsert_risk(
     risk_id: str,
     payload: RiskAcceptanceUpsert,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("ciso"))],
 ) -> RiskAcceptance:
     existing = await db.get(RiskAcceptance, risk_id)
     if existing is None:
@@ -73,6 +76,7 @@ async def upsert_risk(
 async def delete_risk(
     risk_id: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("ciso"))],
 ) -> None:
     risk = await db.get(RiskAcceptance, risk_id)
     if risk is None:

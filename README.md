@@ -57,12 +57,76 @@ Copy `.env.example` to `.env` for local development — it contains all variable
 | `WAFPASS_ENV` | `local` | Environment tag (`local`, `staging`, `production`) |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed CORS origins |
 | `WAFPASS_CONTROLS_DIR` | `controls` | Path to WAF++ control YAML files (used by Sandbox endpoint) |
+| `WAFPASS_JWT_SECRET` | `change-me-…` | **Change in production.** HS256 signing key for access tokens |
+| `WAFPASS_JWT_EXPIRE_MINUTES` | `60` | Access token lifetime in minutes |
+| `WAFPASS_JWT_REFRESH_DAYS` | `7` | Refresh token lifetime in days |
+| `WAFPASS_ADMIN_USERNAME` | `admin` | Username for the bootstrap admin user (seeded once on first startup) |
+| `WAFPASS_ADMIN_PASSWORD` | *(empty)* | Password for the bootstrap admin — **set this** to enable auto-seeding |
+| `WAFPASS_ADMIN_ROLE` | `engineer` | Role for the bootstrap admin (`clevel` \| `ciso` \| `architect` \| `engineer`) |
+| `WAFPASS_API_KEY` | *(empty)* | Pre-shared key for CI/CD pushes — pass as `X-Api-Key` header on `POST /runs` / `POST /scan` |
 
 > **Local dev tip:** When running the dashboard dev server alongside the API, add `http://localhost:5173` to `CORS_ORIGINS` so Vite's dev server can reach the API without CORS errors.
 
 ---
 
+## Authentication
+
+All API endpoints require a valid Bearer JWT except `POST /auth/login` and `GET /health`.
+
+### Quick start
+
+```bash
+# 1. Set admin credentials in .env (first-run only — auto-seeds one user)
+WAFPASS_ADMIN_USERNAME=admin
+WAFPASS_ADMIN_PASSWORD=changeme123
+WAFPASS_ADMIN_ROLE=engineer
+
+# 2. Obtain a token
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"changeme123"}' | jq -r .access_token)
+
+# 3. Use it on any request
+curl http://localhost:8000/runs -H "Authorization: Bearer $TOKEN"
+```
+
+### CI/CD (no user account needed)
+
+Set `WAFPASS_API_KEY=some-secret` on the server and pass it as a header:
+
+```bash
+wafpass check ./terraform --output json | \
+  curl -s -X POST http://localhost:8000/runs \
+       -H "Content-Type: application/json" \
+       -H "X-Api-Key: some-secret" \
+       -d @-
+```
+
+### Role hierarchy
+
+| Role | Inherits | Permitted operations |
+|------|----------|---------------------|
+| `clevel` | — | Read: all run data, waivers, risks, controls |
+| `ciso` | clevel | + Create/update/delete waivers and risk acceptances |
+| `architect` | ciso | + Create/delete controls catalogue entries, run sandbox |
+| `engineer` | architect | + Trigger scans (`POST /scan`), user management |
+
+---
+
 ## API reference
+
+### Authentication
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/auth/login` | None | Exchange credentials for access + refresh tokens |
+| `POST` | `/auth/refresh` | None | Exchange refresh token for new access token |
+| `POST` | `/auth/logout` | None | Revoke a refresh token |
+| `GET` | `/auth/me` | Any | Return current user profile |
+| `GET` | `/auth/users` | engineer | List all users |
+| `POST` | `/auth/users` | engineer | Create a user |
+| `PUT` | `/auth/users/{id}` | engineer | Update user role / password / status |
+| `DELETE` | `/auth/users/{id}` | engineer | Delete a user |
 
 ### Health
 
@@ -201,6 +265,8 @@ alembic current                                # show applied revision
 | `0005_add_controls` | controls catalogue table |
 | `0006_add_secret_findings` | secret_findings JSONB |
 | `0007_add_waivers_risks` | waivers and risk_acceptances tables |
+| `0008_add_stage_to_runs` | stage column on runs |
+| `0009_add_auth_tables` | users and refresh_tokens tables |
 
 ---
 

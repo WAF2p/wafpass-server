@@ -17,6 +17,24 @@ class Settings(BaseSettings):
     # Defaults to a "controls" directory next to the server's working directory.
     wafpass_controls_dir: str = "controls"
 
+    # ── Authentication ────────────────────────────────────────────────────────
+    # IMPORTANT: set a strong random value in production.
+    wafpass_jwt_secret: str = "change-me-in-production-wafpass-secret-key"
+    # Access token lifetime in minutes (default 60 min).
+    wafpass_jwt_expire_minutes: int = 60
+    # Refresh token lifetime in days (default 7 days).
+    wafpass_jwt_refresh_days: int = 7
+
+    # Bootstrap admin user — created once on first startup if users table is empty.
+    # Leave wafpass_admin_password empty to disable auto-seeding.
+    wafpass_admin_username: str = "admin"
+    wafpass_admin_password: str = ""
+    wafpass_admin_role: str = "admin"
+
+    # Pre-shared API key for machine-to-machine access (CI/CD --push workflow).
+    # Empty = disabled.  Set X-Api-Key header to this value on POST /runs / POST /scan.
+    wafpass_api_key: str = ""
+
     # Server-side scan settings
     # Set WAFPASS_SCAN_ENABLED=false to disable POST /scan entirely.
     wafpass_scan_enabled: bool = True

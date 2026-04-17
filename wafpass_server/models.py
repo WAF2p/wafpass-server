@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Integer, Text
+from sqlalchemy import Boolean, DateTime, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -13,6 +13,33 @@ from wafpass_server.database import Base
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+class User(Base):
+    """Local user account.  SSO users will also have a row here (password_hash=NULL)."""
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, default="")
+    role: Mapped[str] = mapped_column(Text, nullable=False, default="clevel")
+    auth_provider: Mapped[str] = mapped_column(Text, nullable=False, default="local")
+    password_hash: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class RefreshToken(Base):
+    """Hashed refresh token records — revoked on logout."""
+    __tablename__ = "refresh_tokens"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class Control(Base):

@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from wafpass_server.auth.deps import get_current_user, require_ingest, require_role
 from wafpass_server.database import get_db
-from wafpass_server.models import Run
+from wafpass_server.models import Run, User
 from wafpass_server.schemas import ControlMetaSchema, FindingSchema, RunCreate, RunDetail, RunSummary, SecretFindingSchema
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -19,7 +20,13 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 async def create_run(
     payload: RunCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User | None, Depends(require_ingest)],
 ) -> Run:
+    """Ingest a wafpass-result.json payload.
+
+    Accepts either a Bearer JWT (any role) or the ``X-Api-Key`` header so that
+    CI/CD pipelines can push results without a user account.
+    """
     run = Run(
         project=payload.project,
         branch=payload.branch,
@@ -48,6 +55,7 @@ async def create_run(
 @router.get("", response_model=list[RunSummary])
 async def list_runs(
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("clevel"))],
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     project: str | None = Query(default=None),
@@ -66,6 +74,7 @@ async def list_runs(
 async def get_run(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("clevel"))],
 ) -> Run:
     run = await db.get(Run, run_id)
     if run is None:
@@ -77,6 +86,7 @@ async def get_run(
 async def get_controls(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("clevel"))],
 ) -> list[dict]:
     run = await db.get(Run, run_id)
     if run is None:
@@ -88,6 +98,7 @@ async def get_controls(
 async def get_findings(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
+    _: Annotated[User, Depends(require_role("clevel"))],
     severity: str | None = Query(default=None),
     pillar: str | None = Query(default=None),
     status: str | None = Query(default=None),
