@@ -70,6 +70,7 @@ class Run(Base):
     git_sha: Mapped[str] = mapped_column(Text, default="")
     triggered_by: Mapped[str] = mapped_column(Text, default="local")
     iac_framework: Mapped[str] = mapped_column(Text, default="terraform")
+    stage: Mapped[str] = mapped_column(Text, default="")
     score: Mapped[int] = mapped_column(Integer, default=0)
     pillar_scores: Mapped[dict] = mapped_column(JSONB, default=dict)
     findings: Mapped[list] = mapped_column(JSONB, default=list)

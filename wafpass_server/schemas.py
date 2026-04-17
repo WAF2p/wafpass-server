@@ -134,6 +134,7 @@ class RunCreate(BaseModel):
     git_sha: str = ""
     triggered_by: str = "local"
     iac_framework: str = "terraform"
+    stage: str = ""
     score: int = Field(default=0, ge=0, le=100)
     pillar_scores: dict[str, int] = Field(default_factory=dict)
     path: str = ""
@@ -154,6 +155,7 @@ class RunSummary(BaseModel):
     git_sha: str
     triggered_by: str
     iac_framework: str
+    stage: str
     score: int
     pillar_scores: dict[str, int]
     path: str

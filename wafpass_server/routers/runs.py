@@ -26,6 +26,7 @@ async def create_run(
         git_sha=payload.git_sha,
         triggered_by=payload.triggered_by,
         iac_framework=payload.iac_framework,
+        stage=payload.stage,
         score=payload.score,
         pillar_scores=payload.pillar_scores,
         findings=[f.model_dump() for f in payload.findings],
@@ -50,10 +51,13 @@ async def list_runs(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     project: str | None = Query(default=None),
+    stage: str | None = Query(default=None),
 ) -> list[Run]:
     stmt = select(Run).order_by(Run.created_at.desc()).limit(limit).offset(offset)
     if project:
         stmt = stmt.where(Run.project == project)
+    if stage:
+        stmt = stmt.where(Run.stage == stage)
     result = await db.execute(stmt)
     return list(result.scalars().all())
 
