@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     # Defaults to a "controls" directory next to the server's working directory.
     wafpass_controls_dir: str = "controls"
 
+    # Server-side scan settings
+    # Set WAFPASS_SCAN_ENABLED=false to disable POST /scan entirely.
+    wafpass_scan_enabled: bool = True
+    # If set, all scan paths must resolve within this directory (path-traversal guard).
+    # Leave empty to allow any path accessible to the server process (dev/local only).
+    wafpass_scan_base_dir: str = ""
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
