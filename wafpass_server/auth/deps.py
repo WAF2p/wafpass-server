@@ -3,16 +3,29 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt.exceptions import PyJWTError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.auth.jwt_utils import decode_access_token
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
-from wafpass_server.models import User
+from wafpass_server.models import ApiKey, User
+
+
+@dataclass
+class IngestAuth:
+    """Carries the authenticated principal for ingest endpoints.
+
+    Exactly one of ``user`` or ``api_key_id`` is set.
+    """
+    user: User | None = None
+    api_key_id: uuid.UUID | None = None
 
 # Role ordering — lower index = fewer permissions.  "admin" is the highest level.
 ROLE_HIERARCHY: list[str] = ["clevel", "ciso", "architect", "engineer", "admin"]
@@ -71,17 +84,30 @@ async def require_ingest(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     x_api_key: str | None = Header(default=None, alias="X-Api-Key"),
     db: AsyncSession = Depends(get_db),
-) -> User | None:
-    """Accept a valid Bearer JWT (any role) OR the pre-shared API key.
+) -> IngestAuth:
+    """Accept a valid Bearer JWT (any role) OR an API key (env-var or DB-stored).
 
     Used by POST /runs and POST /scan so that CI/CD pipelines can push
     scan results without requiring a user account.
 
-    Returns the User on JWT auth, or None when the API key was used.
+    Returns an IngestAuth with either ``user`` set (JWT path) or
+    ``api_key_id`` set (API key path).
     """
-    # ── API key path ──────────────────────────────────────────────────────────
+    # ── API key path (env-var pre-shared key, backward compat) ───────────────
     if x_api_key and settings.wafpass_api_key and x_api_key == settings.wafpass_api_key:
-        return None
+        return IngestAuth(api_key_id=None)  # legacy key has no DB row
+
+    # ── API key path (DB-stored per-service keys) ─────────────────────────────
+    if x_api_key:
+        key_hash = _hash(x_api_key)
+        result = await db.execute(
+            select(ApiKey).where(ApiKey.key_hash == key_hash, ApiKey.is_active.is_(True))
+        )
+        api_key_row = result.scalar_one_or_none()
+        if api_key_row is not None:
+            api_key_row.last_used_at = datetime.now(timezone.utc)
+            await db.commit()
+            return IngestAuth(api_key_id=api_key_row.id)
 
     # ── JWT path ──────────────────────────────────────────────────────────────
     if credentials is not None:
@@ -94,7 +120,7 @@ async def require_ingest(
 
         user = await db.get(User, uuid.UUID(payload["sub"]))
         if user and user.is_active:
-            return user
+            return IngestAuth(user=user)
 
     raise HTTPException(
         status.HTTP_401_UNAUTHORIZED,

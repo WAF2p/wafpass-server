@@ -21,14 +21,14 @@ import uuid
 from pathlib import Path
 from typing import Annotated, Union
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import require_ingest, require_role
+from wafpass_server.auth.deps import IngestAuth, require_ingest, require_role
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
-from wafpass_server.models import Run, User
+from wafpass_server.models import ApiKeyUsageLog, Run, User
 from wafpass_server.schemas import RunSummary
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -113,9 +113,10 @@ async def scan_status(
 
 @router.post("", response_model=RunSummary, status_code=201)
 async def trigger_scan(
+    request: Request,
     payload: ScanRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User | None, Depends(require_ingest)],
+    auth: Annotated[IngestAuth, Depends(require_ingest)],
 ) -> Run:
     """Trigger a WAF++ scan on a server-side path and persist the result."""
 
@@ -275,4 +276,19 @@ async def trigger_scan(
     db.add(run)
     await db.commit()
     await db.refresh(run)
+
+    # Write a usage log row when a DB-tracked API key was used
+    if auth.api_key_id is not None:
+        client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
+        db.add(ApiKeyUsageLog(
+            api_key_id=auth.api_key_id,
+            endpoint="POST /scan",
+            run_id=run.id,
+            project=run.project,
+            branch=run.branch,
+            score=run.score,
+            ip=client_ip,
+        ))
+        await db.commit()
+
     return run

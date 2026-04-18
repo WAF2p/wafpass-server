@@ -4,13 +4,13 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import get_current_user, require_ingest, require_role
+from wafpass_server.auth.deps import IngestAuth, get_current_user, require_ingest, require_role
 from wafpass_server.database import get_db
-from wafpass_server.models import Run, User
+from wafpass_server.models import ApiKeyUsageLog, Run, User, UserAuditLog
 from wafpass_server.schemas import ControlMetaSchema, FindingSchema, RunCreate, RunDetail, RunSummary, SecretFindingSchema
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -18,9 +18,10 @@ router = APIRouter(prefix="/runs", tags=["runs"])
 
 @router.post("", response_model=RunSummary, status_code=201)
 async def create_run(
+    request: Request,
     payload: RunCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User | None, Depends(require_ingest)],
+    auth: Annotated[IngestAuth, Depends(require_ingest)],
 ) -> Run:
     """Ingest a wafpass-result.json payload.
 
@@ -49,6 +50,37 @@ async def create_run(
     db.add(run)
     await db.commit()
     await db.refresh(run)
+
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
+
+    if auth.api_key_id is not None:
+        # DB-tracked API key path
+        db.add(ApiKeyUsageLog(
+            api_key_id=auth.api_key_id,
+            endpoint="POST /runs",
+            run_id=run.id,
+            project=run.project,
+            branch=run.branch,
+            score=run.score,
+            ip=client_ip,
+        ))
+        await db.commit()
+    elif auth.user is not None:
+        # JWT user path — write a user audit log entry
+        db.add(UserAuditLog(
+            actor_id=auth.user.id,
+            action="run.push",
+            detail={
+                "run_id": str(run.id),
+                "project": run.project,
+                "branch": run.branch,
+                "score": run.score,
+                "endpoint": "POST /runs",
+            },
+            ip=client_ip,
+        ))
+        await db.commit()
+
     return run
 
 

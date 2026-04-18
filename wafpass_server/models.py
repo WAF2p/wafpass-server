@@ -26,8 +26,22 @@ class User(Base):
     auth_provider: Mapped[str] = mapped_column(Text, nullable=False, default="local")
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class UserAuditLog(Base):
+    """One row per auditable action performed by (or on) a user account."""
+    __tablename__ = "user_audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # actor_id: the user who performed the action (NULL if the account was deleted)
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)     # "login" | "logout" | "run.push" | etc.
+    detail: Mapped[dict] = mapped_column(JSONB, default=dict)     # action-specific context
+    ip: Mapped[str] = mapped_column(Text, default="")
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
 class RefreshToken(Base):
@@ -86,6 +100,35 @@ class RiskAcceptance(Base):
     project: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class ApiKeyUsageLog(Base):
+    """One row per API-key-authenticated ingest request (POST /runs or POST /scan)."""
+    __tablename__ = "api_key_usage_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    api_key_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)          # "POST /runs" | "POST /scan"
+    run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    project: Mapped[str] = mapped_column(Text, default="")
+    branch: Mapped[str] = mapped_column(Text, default="")
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ip: Mapped[str] = mapped_column(Text, default="")
+
+
+class ApiKey(Base):
+    """DB-stored API key for CI/CD pipelines and service accounts."""
+    __tablename__ = "api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    key_prefix: Mapped[str] = mapped_column(Text, nullable=False)   # first 12 chars (display only)
+    key_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)  # SHA256 of raw key
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Run(Base):
