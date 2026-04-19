@@ -161,6 +161,27 @@ class SsoConfig(Base):
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
 
+class Evidence(Base):
+    """Locked, immutable evidence package — snapshot of a run at a point in time."""
+    __tablename__ = "evidence"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(Text, default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    project: Mapped[str] = mapped_column(Text, default="")
+    prepared_by: Mapped[str] = mapped_column(Text, default="")
+    organization: Mapped[str] = mapped_column(Text, default="")
+    audit_period: Mapped[str] = mapped_column(Text, default="")
+    frameworks: Mapped[list] = mapped_column(JSONB, default=list)
+    snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)  # full frozen run+findings+waivers+risks
+    report_html: Mapped[str | None] = mapped_column(Text, nullable=True)  # pre-rendered HTML blob
+    hash_digest: Mapped[str] = mapped_column(Text, default="")  # SHA256 of canonical snapshot JSON
+    public_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)  # unauthenticated access
+    locked_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Run(Base):
     __tablename__ = "runs"
 

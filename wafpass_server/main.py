@@ -9,6 +9,7 @@ from fastapi.security import HTTPBearer
 from wafpass_server.config import settings
 from wafpass_server.routers.auth import router as auth_router
 from wafpass_server.routers.controls import router as controls_router
+from wafpass_server.routers.evidence import router as evidence_router
 from wafpass_server.routers.risks import router as risks_router
 from wafpass_server.routers.runs import router as runs_router
 from wafpass_server.routers.sandbox import router as sandbox_router
@@ -31,6 +32,7 @@ app = FastAPI(
         {"name": "sandbox", "description": "Run the real WAF++ engine against arbitrary HCL snippets."},
         {"name": "scan", "description": "Run the WAF++ engine against a server-side IaC path and persist the result."},
         {"name": "sso", "description": "SSO configuration and login flows (OIDC, SAML2)."},
+        {"name": "evidence", "description": "Locked, immutable evidence packages for audit handouts with QR codes."},
     ],
 )
 
@@ -48,6 +50,7 @@ app.include_router(runs_router)
 app.include_router(controls_router)
 app.include_router(waivers_router)
 app.include_router(risks_router)
+app.include_router(evidence_router)
 app.include_router(sandbox_router)
 app.include_router(scan_router)
 
