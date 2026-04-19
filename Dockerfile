@@ -15,7 +15,7 @@ COPY wafpass-server/wafpass_server/ wafpass_server/
 COPY wafpass-server/alembic/ alembic/
 COPY wafpass-server/alembic.ini wafpass-server/entrypoint.sh ./
 
-RUN pip install --no-cache-dir . && chmod +x entrypoint.sh
+RUN pip install --no-cache-dir ".[qr]" && chmod +x entrypoint.sh
 
 # Copy WAF++ control YAML files so the sandbox engine can find them.
 # The pass/ directory was already used to install wafpass-core above, but the

@@ -35,6 +35,12 @@ class Settings(BaseSettings):
     # Empty = disabled.  Set X-Api-Key header to this value on POST /runs / POST /scan.
     wafpass_api_key: str = ""
 
+    # Public base URL used to build absolute links in QR codes and audit reports.
+    # Set this to the externally reachable address of the server, e.g.
+    # https://wafpass.example.com  (no trailing slash).
+    # Falls back to the Host header of the incoming request when left empty.
+    wafpass_public_url: str = ""
+
     # Server-side scan settings
     # Set WAFPASS_SCAN_ENABLED=false to disable POST /scan entirely.
     wafpass_scan_enabled: bool = True

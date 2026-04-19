@@ -19,7 +19,7 @@ from wafpass_server.routers.waivers import router as waivers_router
 
 app = FastAPI(
     title="wafpass-server",
-    version="0.4.0",
+    version="1.0.0",
     description="REST API for persisting and querying WAF++ PASS scan results.",
     docs_url="/api/docs",
     redoc_url="/api/redoc",

@@ -9,13 +9,14 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.auth.deps import require_role
+from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import Evidence, Run, User
 
@@ -81,6 +82,21 @@ class EvidenceOut(BaseModel):
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _resolve_base_url(request: Request) -> str:
+    """Return the public base URL for building absolute links in QR codes.
+
+    Uses WAFPASS_PUBLIC_URL if configured, otherwise falls back to the
+    scheme + host of the incoming request (works for local dev; may differ
+    behind a reverse proxy without WAFPASS_PUBLIC_URL set).
+    """
+    if settings.wafpass_public_url:
+        return settings.wafpass_public_url.rstrip("/")
+    # Build from request: respect X-Forwarded-Proto / X-Forwarded-Host if present
+    scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or str(request.base_url.netloc)
+    return f"{scheme}://{host}"
+
 
 def _canonical_hash(snapshot: dict) -> str:
     canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
@@ -271,6 +287,7 @@ async def get_evidence_report_html(
 @router.get("/evidence/{evidence_id}/qr.svg")
 async def get_evidence_qr(
     evidence_id: str,
+    request: Request,
     _: Annotated[User, Depends(require_role("clevel"))],
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
@@ -279,8 +296,7 @@ async def get_evidence_qr(
     row = result.scalar_one_or_none()
     if row is None:
         raise HTTPException(404, detail="Evidence package not found.")
-    # Build public URL (server-relative — clients embed the base URL themselves)
-    public_url = f"/evidence/p/{row.public_token}"
+    public_url = f"{_resolve_base_url(request)}/evidence/p/{row.public_token}"
     return Response(content=_qr_svg(public_url), media_type="image/svg+xml")
 
 
@@ -315,6 +331,7 @@ async def public_evidence_view(
 @router.get("/evidence/p/{token}/qr.svg")
 async def public_evidence_qr(
     token: str,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Return QR SVG for a public evidence token (no auth required — used in PDF embedding)."""
@@ -322,7 +339,7 @@ async def public_evidence_qr(
     row = result.scalar_one_or_none()
     if row is None:
         raise HTTPException(404, detail="Evidence package not found.")
-    public_url = f"/evidence/p/{token}"
+    public_url = f"{_resolve_base_url(request)}/evidence/p/{token}"
     return Response(content=_qr_svg(public_url), media_type="image/svg+xml")
 
 
