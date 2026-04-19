@@ -71,15 +71,15 @@ Copy `.env.example` to `.env` for local development — it contains all variable
 
 ## Authentication
 
-All API endpoints require a valid Bearer JWT except `POST /auth/login` and `GET /health`.
+All API endpoints require a valid Bearer JWT except `POST /auth/login`, the SSO flow endpoints, and `GET /health`.
 
-### Quick start
+### Local accounts
 
 ```bash
 # 1. Set admin credentials in .env (first-run only — auto-seeds one user)
 WAFPASS_ADMIN_USERNAME=admin
 WAFPASS_ADMIN_PASSWORD=changeme123
-WAFPASS_ADMIN_ROLE=engineer
+WAFPASS_ADMIN_ROLE=admin
 
 # 2. Obtain a token
 TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
@@ -89,6 +89,24 @@ TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
 # 3. Use it on any request
 curl http://localhost:8000/runs -H "Authorization: Bearer $TOKEN"
 ```
+
+### SSO (OIDC / SAML2)
+
+SSO is configured through the dashboard **SSO Settings** page (admin only) or directly via the API. Configuration is stored in the database — no server restart required.
+
+**OIDC flow:**
+1. Admin configures discovery URL, client ID/secret, redirect URI, and role mapping in SSO Settings.
+2. Users click "Sign in with OIDC" on the login page → redirect to IdP → callback → JWT issued.
+3. `GET /auth/oidc/authorize` initiates the Authorization Code flow.
+4. `GET /auth/oidc/callback` exchanges the code, provisions the user, issues a JWT, and redirects to the dashboard.
+
+**SAML2 flow:**
+1. Admin configures SP/IdP entity IDs, ACS URL, IdP certificate, and role mapping.
+2. Register the SP using the metadata endpoint: `GET /auth/saml/metadata`.
+3. `GET /auth/saml/login` initiates the SP-initiated SSO redirect.
+4. `POST /auth/saml/acs` validates the assertion, provisions the user, issues a JWT, and redirects.
+
+> SAML2 requires the optional `python3-saml` system dependency: `pip install "wafpass-server[saml]"` (also needs `libxmlsec1` on the host).
 
 ### CI/CD (no user account needed)
 
@@ -110,6 +128,7 @@ wafpass check ./terraform --output json | \
 | `ciso` | clevel | + Create/update/delete waivers and risk acceptances |
 | `architect` | ciso | + Create/delete controls catalogue entries, run sandbox |
 | `engineer` | architect | + Trigger scans (`POST /scan`), user management |
+| `admin` | engineer | + User lifecycle, API key management, SSO configuration |
 
 ---
 
@@ -127,6 +146,24 @@ wafpass check ./terraform --output json | \
 | `POST` | `/auth/users` | engineer | Create a user |
 | `PUT` | `/auth/users/{id}` | engineer | Update user role / password / status |
 | `DELETE` | `/auth/users/{id}` | engineer | Delete a user |
+
+### SSO
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/sso/providers` | None | List enabled SSO providers (for login page) |
+| `GET` | `/sso/config` | admin | List all SSO configurations |
+| `PUT` | `/sso/config/{provider}` | admin | Upsert OIDC or SAML2 configuration |
+| `DELETE` | `/sso/config/{provider}` | admin | Remove an SSO configuration |
+| `GET` | `/sso/group-mappings` | admin | List all group → role mappings |
+| `POST` | `/sso/group-mappings` | admin | Create a group → role mapping |
+| `PUT` | `/sso/group-mappings/{id}` | admin | Update a group → role mapping |
+| `DELETE` | `/sso/group-mappings/{id}` | admin | Delete a group → role mapping |
+| `GET` | `/auth/oidc/authorize` | None | Initiate OIDC Authorization Code flow |
+| `GET` | `/auth/oidc/callback` | None | OIDC callback — issue JWT, redirect to dashboard |
+| `GET` | `/auth/saml/metadata` | None | SP metadata XML (register with IdP) |
+| `GET` | `/auth/saml/login` | None | Initiate SAML2 SP-initiated SSO |
+| `POST` | `/auth/saml/acs` | None | SAML2 Assertion Consumer Service |
 
 ### Health
 
@@ -267,6 +304,11 @@ alembic current                                # show applied revision
 | `0007_add_waivers_risks` | waivers and risk_acceptances tables |
 | `0008_add_stage_to_runs` | stage column on runs |
 | `0009_add_auth_tables` | users and refresh_tokens tables |
+| `0010_add_api_keys` | api_keys table |
+| `0011_add_api_key_usage_logs` | api_key_usage_logs table |
+| `0012_add_user_audit_logs` | user_audit_logs table |
+| `0013_add_sso_config` | sso_configs table (OIDC + SAML2 configuration) |
+| `0014_add_group_role_mappings` | group_role_mappings table (centralized IdP group → role resolution) |
 
 ---
 

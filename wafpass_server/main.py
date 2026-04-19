@@ -13,6 +13,7 @@ from wafpass_server.routers.risks import router as risks_router
 from wafpass_server.routers.runs import router as runs_router
 from wafpass_server.routers.sandbox import router as sandbox_router
 from wafpass_server.routers.scan import router as scan_router
+from wafpass_server.routers.sso import router as sso_router
 from wafpass_server.routers.waivers import router as waivers_router
 
 app = FastAPI(
@@ -29,6 +30,7 @@ app = FastAPI(
         {"name": "risks", "description": "Team-shared risk acceptance records."},
         {"name": "sandbox", "description": "Run the real WAF++ engine against arbitrary HCL snippets."},
         {"name": "scan", "description": "Run the WAF++ engine against a server-side IaC path and persist the result."},
+        {"name": "sso", "description": "SSO configuration and login flows (OIDC, SAML2)."},
     ],
 )
 
@@ -41,6 +43,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(sso_router)
 app.include_router(runs_router)
 app.include_router(controls_router)
 app.include_router(waivers_router)

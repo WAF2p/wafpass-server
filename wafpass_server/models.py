@@ -131,6 +131,36 @@ class ApiKey(Base):
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class GroupRoleMapping(Base):
+    """Maps an IdP group/claim value to a WAF++ role.
+
+    Evaluated during SSO login before the per-provider role_mapping in SsoConfig.
+    provider = "*" matches any SSO provider.
+    Higher priority = evaluated first; first match wins.
+    """
+    __tablename__ = "group_role_mappings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    provider: Mapped[str] = mapped_column(Text, nullable=False, default="*")  # "oidc" | "saml2" | "*"
+    group_name: Mapped[str] = mapped_column(Text, nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+
+class SsoConfig(Base):
+    """SSO provider configuration (one row per provider: 'oidc' or 'saml2')."""
+    __tablename__ = "sso_configs"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)  # "oidc" | "saml2"
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+
 class Run(Base):
     __tablename__ = "runs"
 

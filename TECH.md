@@ -12,17 +12,17 @@ wafpass-server/
 │   ├── main.py          # FastAPI app factory, middleware, router registration, /health, startup seeding
 │   ├── config.py        # Settings via pydantic-settings (env var parsing)
 │   ├── database.py      # SQLAlchemy async engine + session factory
-│   ├── models.py        # ORM models: User, RefreshToken, Run, Control, Waiver, RiskAcceptance
-│   ├── schemas.py       # Pydantic request/response models
+│   ├── models.py        # ORM models: User, RefreshToken, SsoConfig, Run, Control, Waiver, RiskAcceptance, ApiKey, …
 │   ├── auth/
 │   │   ├── __init__.py
 │   │   ├── jwt_utils.py          # create_access_token, decode_access_token (HS256)
 │   │   ├── deps.py               # get_current_user, require_role(), require_ingest()
 │   │   └── providers/
 │   │       ├── base.py           # AuthProvider protocol + UserRecord dataclass
-│   │       └── local.py          # bcrypt verify via passlib (Phase 1)
+│   │       └── local.py          # bcrypt password verify
 │   └── routers/
-│       ├── auth.py      # POST/GET /auth/login, /refresh, /logout, /me, /users
+│       ├── auth.py      # POST/GET /auth/login, /refresh, /logout, /me, /users, /api-keys
+│       ├── sso.py       # GET/PUT/DELETE /sso/config, OIDC + SAML2 login flows
 │       ├── runs.py      # POST/GET /runs (auth-gated)
 │       ├── controls.py  # CRUD /controls (auth-gated)
 │       ├── waivers.py   # PUT/GET/DELETE /waivers (auth-gated)
@@ -40,7 +40,11 @@ wafpass-server/
 │       ├── 0006_add_secret_findings.py
 │       ├── 0007_add_waivers_risks.py
 │       ├── 0008_add_stage_to_runs.py
-│       └── 0009_add_auth_tables.py
+│       ├── 0009_add_auth_tables.py
+│       ├── 0010_add_api_keys.py
+│       ├── 0011_add_api_key_usage_logs.py
+│       ├── 0012_add_user_audit_logs.py
+│       └── 0013_add_sso_config.py
 ├── alembic.ini
 ├── entrypoint.sh        # Runs migrations then starts uvicorn
 ├── Dockerfile
@@ -113,24 +117,64 @@ Several large columns (`findings`, `controls_meta`, `secret_findings`, `plan_cha
 
 ## Authentication architecture (`auth/`)
 
-### Token flow
+### Token flows
 
+**Local login:**
 ```
 Browser / CLI
-    │
     │  POST /auth/login {username, password}
     ▼
 auth/providers/local.py  ─── bcrypt verify ──▶  users table
-    │
     │  success: issue tokens
     ▼
 jwt_utils.py
     ├─ create_access_token()  →  HS256 JWT (sub, username, role, exp)
     └─ secrets.token_urlsafe()  →  opaque refresh token (stored hashed in refresh_tokens)
-    │
     │  {access_token, refresh_token, user}
     ▼
 Browser stores both in localStorage
+```
+
+**OIDC login:**
+```
+Browser
+    │  GET /auth/oidc/authorize
+    ▼
+routers/sso.py  ─── fetch discovery doc ──▶  IdP /.well-known/openid-configuration
+    │  302 redirect with signed JWT state + code_challenge
+    ▼
+IdP authentication page
+    │  302 redirect back  ?code=…&state=…
+    ▼
+GET /auth/oidc/callback
+    ├─ verify JWT state (signed with WAFPASS_JWT_SECRET, 10 min TTL)
+    ├─ POST token_endpoint  →  id_token + access_token
+    ├─ decode id_token claims (unverified) or call userinfo_endpoint
+    ├─ provision/update User row (auth_provider="oidc")
+    └─ issue WAF++ JWT + refresh token
+    │  302 redirect  {frontend_url}?sso_ok=1&at=…&rt=…&u=BASE64_USER
+    ▼
+Dashboard: AuthContext detects sso_ok=1 query param on mount → stores tokens
+```
+
+**SAML2 login:**
+```
+Browser
+    │  GET /auth/saml/login
+    ▼
+routers/sso.py  ─── python3-saml AuthnRequest ──▶  302 redirect to IdP SSO URL
+    ▼
+IdP authentication + consent
+    │  POST /auth/saml/acs  {SAMLResponse=…}
+    ▼
+routers/sso.py
+    ├─ python3-saml process_response()  ──▶  validate XML signature with IdP cert
+    ├─ extract NameID + configured attributes
+    ├─ provision/update User row (auth_provider="saml2")
+    └─ issue WAF++ JWT + refresh token
+    │  302 redirect  {frontend_url}?sso_ok=1&at=…&rt=…&u=BASE64_USER
+    ▼
+Dashboard: AuthContext detects sso_ok=1 query param on mount → stores tokens
 ```
 
 ### JWT claims
@@ -149,10 +193,16 @@ Browser stores both in localStorage
 ### Role hierarchy
 
 ```python
-ROLE_HIERARCHY = ["clevel", "ciso", "architect", "engineer"]
+ROLE_HIERARCHY = ["clevel", "ciso", "architect", "engineer", "admin"]
 ```
 
-`require_role("ciso")` accepts any user with index ≥ 1 (ciso, architect, engineer).
+`require_role("ciso")` accepts any user with index ≥ 1 (ciso, architect, engineer, admin).
+
+### SSO configuration storage
+
+SSO provider settings are stored in the `sso_configs` table (one row per provider: `oidc` or `saml2`). The `config` column is JSONB and holds all provider-specific fields (discovery URL, client credentials, certificate PEM, role mapping, etc.). This allows runtime reconfiguration without restarting the server.
+
+Sensitive values (client secrets, private keys) are stored as plain text in the database column — protect access to the database accordingly. Future hardening: encrypt these fields at rest with a KMS-backed key.
 
 ### Machine-to-machine (CI/CD)
 
@@ -160,11 +210,7 @@ ROLE_HIERARCHY = ["clevel", "ciso", "architect", "engineer"]
 
 ### Provider abstraction
 
-`auth/providers/base.py` defines an `AuthProvider` Protocol. Phase 1 only ships `local.py` (bcrypt). Future phases add:
-- `ldap.py` — `ldap3` bind against Active Directory / Samba DC; AD group → role mapping
-- `oidc.py` — PKCE authorization code flow; works with Entra ID and Keycloak; group claim → role mapping
-
-The `POST /auth/login` handler dispatches to the provider configured via `WAFPASS_AUTH_PROVIDER` (default: `local`). JWT issuance is provider-agnostic.
+`auth/providers/base.py` defines an `AuthProvider` Protocol. `local.py` handles bcrypt passwords. SSO flows (OIDC, SAML2) live in `routers/sso.py` — they bypass the provider protocol entirely and provision users directly after validating the IdP response. LDAP is planned for a future release.
 
 ### Bootstrap admin seeding
 
@@ -174,17 +220,18 @@ On startup, if `WAFPASS_ADMIN_PASSWORD` is set and the `users` table is empty, t
 
 ## ORM models (`models.py`)
 
-### User / RefreshToken
+### User / RefreshToken / SsoConfig
 
 ```
 users
 ├── id             UUID   PK
 ├── username       TEXT   UNIQUE NOT NULL
 ├── display_name   TEXT
-├── role           TEXT   (clevel | ciso | architect | engineer)
-├── auth_provider  TEXT   (local | ldap | entra | keycloak)
+├── role           TEXT   (clevel | ciso | architect | engineer | admin)
+├── auth_provider  TEXT   (local | oidc | saml2)
 ├── password_hash  TEXT   NULL for SSO users
 ├── is_active      BOOL
+├── last_login_at  TIMESTAMPTZ  NULL
 ├── created_at     TIMESTAMPTZ
 └── updated_at     TIMESTAMPTZ
 
@@ -195,7 +242,18 @@ refresh_tokens
 ├── expires_at     TIMESTAMPTZ
 ├── revoked        BOOL
 └── created_at     TIMESTAMPTZ
+
+sso_configs                         # one row per provider ("oidc" | "saml2")
+├── id             TEXT   PK
+├── enabled        BOOL
+├── config         JSONB   # all provider-specific settings (see below)
+├── updated_at     TIMESTAMPTZ
+└── updated_by     UUID   NULL  (FK to users.id — not enforced)
 ```
+
+**OIDC `config` keys:** `discovery_url`, `client_id`, `client_secret`, `redirect_uri`, `frontend_url`, `scopes` (list), `username_claim`, `display_name_claim`, `default_role`, `role_claim`, `role_mapping` (object), `auto_provision`.
+
+**SAML2 `config` keys:** `entity_id`, `acs_url`, `sp_certificate`, `sp_private_key`, `idp_entity_id`, `idp_sso_url`, `idp_certificate`, `frontend_url`, `username_attribute`, `display_name_attribute`, `default_role`, `role_attribute`, `role_mapping` (object), `auto_provision`.
 
 ### Run
 
@@ -427,9 +485,13 @@ Filtering findings by `severity`, `pillar`, and `status` via `GET /runs/{id}/fin
 
 The runs router returns raw lists; the controls router wraps in `{data, meta}`. This should be unified but is a breaking API change.
 
-### No OIDC / LDAP (Phase 2+)
+### SSO secrets stored as plaintext in JSONB
 
-Phase 1 ships local password auth only. The provider abstraction (`auth/providers/base.py`) is ready for LDAP and OIDC implementations. See the architectural RBAC notes in `wafpass-dashboard/TECH.md` for the Phase 2 / Phase 3 plan.
+Client secrets (OIDC) and SP private keys (SAML2) are stored unencrypted in the `sso_configs.config` JSONB column. Anyone with database read access can extract these. **Fix:** encrypt sensitive fields at rest before writing to DB, using a KMS-backed key or a dedicated secrets manager (Vault, AWS Secrets Manager).
+
+### No LDAP (Phase 3+)
+
+OIDC and SAML2 are live. LDAP / Kerberos bind against Active Directory is planned for a future release. The `auth/providers/base.py` protocol is ready for an `ldap.py` implementation.
 
 ### Refresh token rotation not yet implemented
 
