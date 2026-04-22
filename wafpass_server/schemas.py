@@ -126,6 +126,31 @@ class RiskAcceptanceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ProjectPassportUpsert(BaseModel):
+    display_name: str = ""
+    owner: str = ""
+    owner_team: str = ""
+    contact_email: str = ""
+    description: str = ""
+    criticality: str = ""
+    environment: str = ""
+    cloud_provider: str = ""
+    repository_url: str = ""
+    documentation_url: str = ""
+    tags: list[str] = Field(default_factory=list)
+    notes: str = ""
+    image_url: str = ""
+
+
+class ProjectPassportOut(ProjectPassportUpsert):
+    project: str
+    updated_by: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class RunCreate(BaseModel):
     """Payload accepted by POST /runs — matches wafpass-result.json schema."""
     schema_version: str = "1.0"

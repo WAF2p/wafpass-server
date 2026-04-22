@@ -14,6 +14,7 @@ from wafpass_server.routers.risks import router as risks_router
 from wafpass_server.routers.runs import router as runs_router
 from wafpass_server.routers.sandbox import router as sandbox_router
 from wafpass_server.routers.scan import router as scan_router
+from wafpass_server.routers.projects import router as projects_router
 from wafpass_server.routers.sso import router as sso_router
 from wafpass_server.routers.waivers import router as waivers_router
 
@@ -33,6 +34,7 @@ app = FastAPI(
         {"name": "scan", "description": "Run the WAF++ engine against a server-side IaC path and persist the result."},
         {"name": "sso", "description": "SSO configuration and login flows (OIDC, SAML2)."},
         {"name": "evidence", "description": "Locked, immutable evidence packages for audit handouts with QR codes."},
+        {"name": "projects", "description": "Project passport — per-project metadata, editable by admin and architect."},
     ],
 )
 
@@ -51,6 +53,7 @@ app.include_router(controls_router)
 app.include_router(waivers_router)
 app.include_router(risks_router)
 app.include_router(evidence_router)
+app.include_router(projects_router)
 app.include_router(sandbox_router)
 app.include_router(scan_router)
 

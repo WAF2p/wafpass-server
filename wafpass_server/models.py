@@ -182,6 +182,29 @@ class Evidence(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class ProjectPassport(Base):
+    """Per-project metadata record — editable by admin and architect only."""
+    __tablename__ = "project_passports"
+
+    project: Mapped[str] = mapped_column(Text, primary_key=True)
+    display_name: Mapped[str] = mapped_column(Text, default="")
+    owner: Mapped[str] = mapped_column(Text, default="")
+    owner_team: Mapped[str] = mapped_column(Text, default="")
+    contact_email: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    criticality: Mapped[str] = mapped_column(Text, default="")      # critical|high|medium|low
+    environment: Mapped[str] = mapped_column(Text, default="")       # production|staging|development|mixed
+    cloud_provider: Mapped[str] = mapped_column(Text, default="")    # aws|azure|gcp|multi|other
+    repository_url: Mapped[str] = mapped_column(Text, default="")
+    documentation_url: Mapped[str] = mapped_column(Text, default="")
+    tags: Mapped[list] = mapped_column(JSONB, default=list)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    image_url: Mapped[str] = mapped_column(Text, default="")
+    updated_by: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class Run(Base):
     __tablename__ = "runs"
 

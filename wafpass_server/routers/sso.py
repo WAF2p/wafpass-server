@@ -409,7 +409,12 @@ async def oidc_authorize(
         "scope": " ".join(scopes),
         "state": state,
     })
-    return RedirectResponse(f"{discovery['authorization_endpoint']}?{params}", status_code=302)
+    # Allow overriding the browser-facing authorization endpoint separately from
+    # the discovery URL — needed when the server reaches the IdP via an internal
+    # hostname (e.g. "keycloak:8080") but the browser must use a public one
+    # (e.g. "localhost:8080").
+    auth_endpoint = cfg.get("authorization_endpoint") or discovery["authorization_endpoint"]
+    return RedirectResponse(f"{auth_endpoint}?{params}", status_code=302)
 
 
 @router.get("/auth/oidc/callback")
