@@ -205,6 +205,21 @@ class ProjectPassport(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class ProjectAchievement(Base):
+    """Verified maturity achievement — a project reaching a tier milestone for the first time."""
+    __tablename__ = "project_achievements"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    tier_level: Mapped[int] = mapped_column(Integer, nullable=False)         # 1–5
+    tier_label: Mapped[str] = mapped_column(Text, nullable=False)            # Foundational|…|Excellence
+    score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)   # score at achievement time
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    verification_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    snapshot_jsonb: Mapped[dict] = mapped_column(JSONB, default=dict)        # pillar_scores snapshot
+    achieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Run(Base):
     __tablename__ = "runs"
 

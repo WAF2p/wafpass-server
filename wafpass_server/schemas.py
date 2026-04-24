@@ -202,6 +202,23 @@ class RunDetail(RunSummary):
     model_config = {"from_attributes": True}
 
 
+# ── Achievement schemas ───────────────────────────────────────────────────────
+
+
+class AchievementOut(BaseModel):
+    id: uuid.UUID
+    project: str
+    tier_level: int
+    tier_label: str
+    score: int
+    run_id: uuid.UUID
+    verification_token: str
+    snapshot_jsonb: dict[str, Any]
+    achieved_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ── Control schemas ───────────────────────────────────────────────────────────
 
 

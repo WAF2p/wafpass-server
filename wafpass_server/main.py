@@ -14,6 +14,9 @@ from wafpass_server.routers.risks import router as risks_router
 from wafpass_server.routers.runs import router as runs_router
 from wafpass_server.routers.sandbox import router as sandbox_router
 from wafpass_server.routers.scan import router as scan_router
+from wafpass_server.routers.achievements import router as achievements_router
+from wafpass_server.routers.badges import router as badges_router
+from wafpass_server.routers.leaderboard import router as leaderboard_router
 from wafpass_server.routers.projects import router as projects_router
 from wafpass_server.routers.sso import router as sso_router
 from wafpass_server.routers.waivers import router as waivers_router
@@ -35,6 +38,9 @@ app = FastAPI(
         {"name": "sso", "description": "SSO configuration and login flows (OIDC, SAML2)."},
         {"name": "evidence", "description": "Locked, immutable evidence packages for audit handouts with QR codes."},
         {"name": "projects", "description": "Project passport — per-project metadata, editable by admin and architect."},
+        {"name": "achievements", "description": "Verified maturity achievements with public proof-of-excellence pages."},
+        {"name": "badges", "description": "Live SVG status badges for READMEs — shields.io-style, no auth required."},
+        {"name": "leaderboard", "description": "Hall of Fame — top sovereign and most improved projects."},
     ],
 )
 
@@ -48,6 +54,9 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(sso_router)
+app.include_router(achievements_router)
+app.include_router(badges_router)
+app.include_router(leaderboard_router)
 app.include_router(runs_router)
 app.include_router(controls_router)
 app.include_router(waivers_router)

@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wafpass_server.auth.deps import IngestAuth, get_current_user, require_ingest, require_role
 from wafpass_server.database import get_db
 from wafpass_server.models import ApiKeyUsageLog, Run, User, UserAuditLog
+from wafpass_server.routers.achievements import evaluate_and_record_achievements
 from wafpass_server.schemas import ControlMetaSchema, FindingSchema, RunCreate, RunDetail, RunSummary, SecretFindingSchema
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -50,6 +51,8 @@ async def create_run(
     db.add(run)
     await db.commit()
     await db.refresh(run)
+
+    await evaluate_and_record_achievements(db, run)
 
     client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
 

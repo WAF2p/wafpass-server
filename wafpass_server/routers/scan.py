@@ -277,6 +277,9 @@ async def trigger_scan(
     await db.commit()
     await db.refresh(run)
 
+    from wafpass_server.routers.achievements import evaluate_and_record_achievements
+    await evaluate_and_record_achievements(db, run)
+
     # Write a usage log row when a DB-tracked API key was used
     if auth.api_key_id is not None:
         client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
