@@ -12,7 +12,9 @@ wafpass-server/
 │   ├── main.py          # FastAPI app factory, middleware, router registration, /health, startup seeding
 │   ├── config.py        # Settings via pydantic-settings (env var parsing)
 │   ├── database.py      # SQLAlchemy async engine + session factory
-│   ├── models.py        # ORM models: User, RefreshToken, SsoConfig, Run, Control, Waiver, RiskAcceptance, ApiKey, …
+│   ├── models.py        # ORM models: User, RefreshToken, SsoConfig, Run, Control, Waiver, RiskAcceptance,
+│   │                    #             ApiKey, Evidence, ProjectPassport, ProjectAchievement, …
+│   ├── schemas.py       # Pydantic response/input schemas (AchievementOut, ProjectPassportOut, …)
 │   ├── auth/
 │   │   ├── __init__.py
 │   │   ├── jwt_utils.py          # create_access_token, decode_access_token (HS256)
@@ -21,14 +23,19 @@ wafpass-server/
 │   │       ├── base.py           # AuthProvider protocol + UserRecord dataclass
 │   │       └── local.py          # bcrypt password verify
 │   └── routers/
-│       ├── auth.py      # POST/GET /auth/login, /refresh, /logout, /me, /users, /api-keys
-│       ├── sso.py       # GET/PUT/DELETE /sso/config, OIDC + SAML2 login flows
-│       ├── runs.py      # POST/GET /runs (auth-gated)
-│       ├── controls.py  # CRUD /controls (auth-gated)
-│       ├── waivers.py   # PUT/GET/DELETE /waivers (auth-gated)
-│       ├── risks.py     # PUT/GET/DELETE /risks (auth-gated)
-│       ├── sandbox.py   # POST /sandbox, GET /sandbox/status (auth-gated)
-│       └── scan.py      # POST /scan, GET /scan/status (auth-gated)
+│       ├── auth.py          # POST/GET /auth/login, /refresh, /logout, /me, /users, /api-keys
+│       ├── sso.py           # GET/PUT/DELETE /sso/config, OIDC + SAML2 login flows
+│       ├── runs.py          # POST/GET /runs (auth-gated); triggers achievement evaluation on ingest
+│       ├── controls.py      # CRUD /controls (auth-gated)
+│       ├── waivers.py       # PUT/GET/DELETE /waivers (auth-gated)
+│       ├── risks.py         # PUT/GET/DELETE /risks (auth-gated)
+│       ├── sandbox.py       # POST /sandbox, GET /sandbox/status (auth-gated)
+│       ├── scan.py          # POST /scan, GET /scan/status (auth-gated)
+│       ├── evidence.py      # Evidence Locker — locked audit packages with QR codes and public tokens
+│       ├── achievements.py  # Maturity tier milestones + public verification page
+│       ├── leaderboard.py   # Hall of Fame — top sovereign + most improved rankings
+│       ├── badges.py        # Live SVG badges and shields.io-compatible JSON endpoint
+│       └── projects.py      # Project Passport CRUD
 ├── alembic/
 │   ├── env.py           # Alembic environment (async-compatible)
 │   └── versions/
@@ -44,7 +51,12 @@ wafpass-server/
 │       ├── 0010_add_api_keys.py
 │       ├── 0011_add_api_key_usage_logs.py
 │       ├── 0012_add_user_audit_logs.py
-│       └── 0013_add_sso_config.py
+│       ├── 0013_add_sso_config.py
+│       ├── 0014_add_group_role_mappings.py
+│       ├── 0015_add_evidence.py
+│       ├── 0016_add_project_passports.py
+│       ├── 0017_add_passport_image_url.py
+│       └── 0018_add_achievements.py
 ├── alembic.ini
 ├── entrypoint.sh        # Runs migrations then starts uvicorn
 ├── Dockerfile
@@ -327,6 +339,75 @@ risk_acceptances
 ├── created_at     TIMESTAMPTZ
 └── updated_at     TIMESTAMPTZ
 ```
+
+### Evidence
+
+Immutable, locked audit package. The `snapshot` JSONB column is written once and never mutated. The SHA-256 hash of the canonical snapshot (`json.dumps(snapshot, sort_keys=True)`) is stored in `hash_digest` and serves as the integrity proof handed to auditors. `public_token` is a 32-character URL-safe random string that lets unauthenticated viewers access the evidence report (`/evidence/p/{token}`) and QR code without a login.
+
+```
+evidence
+├── id             UUID   PK  (server_default = gen_random_uuid())
+├── run_id         UUID   FK → runs.id
+├── title          TEXT
+├── note           TEXT
+├── project        TEXT   (copied from the run at lock time)
+├── prepared_by    TEXT
+├── organization   TEXT
+├── audit_period   TEXT
+├── frameworks     JSONB  list[str]  (e.g. ["ISO 27001", "SOC2"])
+├── snapshot       JSONB  (frozen payload — run, findings, waivers, risks, audit log)
+├── report_html    TEXT   NULL  (optional pre-rendered HTML)
+├── hash_digest    TEXT   (SHA-256 of canonical snapshot)
+├── public_token   TEXT   UNIQUE  (URL-safe random 32-char token)
+├── locked_by      UUID   FK → users.id  NULL
+└── created_at     TIMESTAMPTZ  server_default=now()
+```
+
+**QR code generation:** Requires the optional `segno` library (`pip install segno`). If unavailable, a plain SVG placeholder is returned. The QR code URL embeds `WAFPASS_PUBLIC_URL` (from env) as the base; falls back to the incoming request's `X-Forwarded-Proto` / `X-Forwarded-Host` headers.
+
+### ProjectPassport
+
+Per-project metadata used by the Leaderboard, Dashboard, and Badge pages to enrich project listings. Upserted by architects; readable by all roles.
+
+```
+project_passports
+├── project        TEXT   PK
+├── display_name   TEXT
+├── owner          TEXT
+├── owner_team     TEXT
+├── contact_email  TEXT
+├── description    TEXT
+├── criticality    TEXT   (e.g. "critical", "high", "medium", "low")
+├── environment    TEXT   (e.g. "production", "staging")
+├── cloud_provider TEXT   (e.g. "aws", "azure", "gcp")
+├── repository_url TEXT
+├── documentation_url TEXT
+├── image_url      TEXT   (logo / avatar URL)
+├── tags           JSONB  list[str]
+├── notes          TEXT
+├── updated_by     TEXT   (username of last editor)
+├── created_at     TIMESTAMPTZ
+└── updated_at     TIMESTAMPTZ
+```
+
+### ProjectAchievement
+
+Maturity tier milestone records. One row per `(project, tier_level)` pair — a project can hold at most one achievement per tier (lower tiers are never revoked when a higher tier is reached). `verification_token` is a 44-character URL-safe random string that serves as the publicly-shareable proof of achievement at `/public/achievements/{token}`.
+
+```
+project_achievements
+├── id                  UUID   PK
+├── project             TEXT   NOT NULL
+├── tier_level          INTEGER  (1–5)
+├── tier_label          TEXT   ("Foundational" | "Operational" | "Governed" | "Optimized" | "Excellence")
+├── score               INTEGER  (score at the time of achievement)
+├── run_id              UUID   FK → runs.id  NULL
+├── verification_token  TEXT   UNIQUE  (44-char URL-safe random token)
+├── snapshot_jsonb      JSONB  (pillar_scores at achievement time)
+└── achieved_at         TIMESTAMPTZ  server_default=now()
+```
+
+**Achievement evaluation flow:** `POST /runs` calls `evaluate_and_record_achievements(db, run)` after persisting the run. The function checks which tier thresholds the run's score qualifies for and creates `ProjectAchievement` rows only for tiers the project has not previously held.
 
 ---
 

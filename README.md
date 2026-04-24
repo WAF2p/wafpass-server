@@ -278,6 +278,91 @@ curl -X POST http://localhost:8000/sandbox \
 
 Without `wafpass-core`, the server starts normally and all other endpoints remain available. Sandbox returns `503` with a descriptive message.
 
+### Evidence Locker
+
+Cryptographically-locked, immutable audit packages. Locking freezes a run snapshot at the moment of creation, computes a SHA-256 hash of the canonical payload, and generates a shareable public token so auditors can view the package without a login.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/evidence` | engineer | Lock a run as an immutable evidence package |
+| `GET` | `/evidence` | clevel | List evidence packages (`project`, `limit`, `offset`) |
+| `GET` | `/evidence/{id}` | clevel | Get evidence metadata |
+| `GET` | `/evidence/{id}/snapshot` | clevel | Return the raw frozen JSON snapshot |
+| `GET` | `/evidence/{id}/report.html` | clevel | Download the locked HTML report |
+| `GET` | `/evidence/{id}/qr.svg` | clevel | QR code SVG linking to the public auditor URL |
+| `DELETE` | `/evidence/{id}` | admin | Delete an evidence package |
+| `GET` | `/evidence/p/{token}` | None | Public auditor view (unauthenticated) |
+| `GET` | `/evidence/p/{token}/qr.svg` | None | Public QR code (for PDF embedding) |
+| `GET` | `/evidence/p/{token}/meta` | None | Public metadata (used by CLI) |
+
+Each locked package includes: title, prepared-by, organization, audit period, regulatory frameworks, SHA-256 hash digest, a public token, and the locking user. The `WAFPASS_PUBLIC_URL` env var controls the base URL embedded in QR codes (defaults to the incoming request's scheme + host).
+
+### Achievements
+
+Maturity tier milestones. Achievements are awarded automatically when a project reaches a new compliance score threshold for the first time. The public verification page is unauthenticated, making achievements shareable on READMEs and external dashboards.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/achievements` | clevel | List all achievements (`project` filter) |
+| `GET` | `/achievements/{project}` | clevel | List achievements for a project |
+| `GET` | `/public/achievements/{token}` | None | Public cryptographic verification page |
+
+Tier thresholds:
+
+| Level | Label | Min Score |
+|-------|-------|-----------|
+| L1 | Foundational | 0 |
+| L2 | Operational | 40 |
+| L3 | Governed | 60 |
+| L4 | Optimized | 75 |
+| L5 | Excellence | 90 |
+
+Achievements are evaluated automatically on every `POST /runs`. A new achievement is recorded only when the project reaches a tier level it has not previously held.
+
+### Leaderboard
+
+Hall of Fame — top sovereign and most improved projects across the organisation.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/leaderboard` | clevel | Top-sovereign and most-improved project rankings |
+
+Returns two ranked lists:
+- **Top Sovereign** — projects that have held Tier 5 the longest (by `achieved_at` ascending).
+- **Most Improved** — projects that gained the most tier levels in the last 30 days.
+
+Both lists include project display name, owner, team, current score, tier, and days held (from `ProjectPassport` if configured).
+
+### Live Status Badges
+
+Shields.io-style SVG badges for READMEs and external dashboards. Live badges reflect the latest run score; static tier badges are pre-rendered for air-gapped environments.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/public/badge/{project}.svg` | None | Dynamic SVG badge (latest run → tier label) |
+| `GET` | `/public/badge/{project}/download` | None | Same badge with `Content-Disposition: attachment` |
+| `GET` | `/public/badge/{project}/json` | None | JSON status (shields.io endpoint-badge compatible) |
+| `GET` | `/public/badge/static/{tier_level}.svg` | None | Pre-rendered static badge (1–5) |
+
+Embed a live badge in your README:
+
+```markdown
+![WAF++ PASS](https://wafpass.example.com/public/badge/my-project.svg)
+```
+
+For air-gapped environments: download via `/download` and commit the SVG.
+
+### Project Passports
+
+Per-project metadata — display name, owner, team, contact, description, criticality, environment, cloud provider, and repository/documentation URLs. Used by the Leaderboard and Dashboard pages to enrich project listings.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/projects/passports` | clevel | List all project passports |
+| `GET` | `/projects/{project}/passport` | clevel | Get a project's passport |
+| `PUT` | `/projects/{project}/passport` | architect | Upsert a project passport |
+| `DELETE` | `/projects/{project}/passport` | admin | Delete a project passport |
+
 ---
 
 ## Database migrations
@@ -309,6 +394,10 @@ alembic current                                # show applied revision
 | `0012_add_user_audit_logs` | user_audit_logs table |
 | `0013_add_sso_config` | sso_configs table (OIDC + SAML2 configuration) |
 | `0014_add_group_role_mappings` | group_role_mappings table (centralized IdP group → role resolution) |
+| `0015_add_evidence` | evidence table (locked audit packages with SHA-256 hash and public token) |
+| `0016_add_project_passports` | project_passports table (per-project metadata) |
+| `0017_add_passport_image_url` | image_url column on project_passports |
+| `0018_add_achievements` | project_achievements table (maturity tier milestones with verification tokens) |
 
 ---
 
