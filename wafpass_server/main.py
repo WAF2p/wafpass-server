@@ -19,6 +19,7 @@ from wafpass_server.routers.badges import router as badges_router
 from wafpass_server.routers.leaderboard import router as leaderboard_router
 from wafpass_server.routers.projects import router as projects_router
 from wafpass_server.routers.sso import router as sso_router
+from wafpass_server.routers.compliance_audit import router as compliance_audit_router
 from wafpass_server.routers.waivers import router as waivers_router
 
 app = FastAPI(
@@ -41,6 +42,7 @@ app = FastAPI(
         {"name": "achievements", "description": "Verified maturity achievements with public proof-of-excellence pages."},
         {"name": "badges", "description": "Live SVG status badges for READMEs — shields.io-style, no auth required."},
         {"name": "leaderboard", "description": "Hall of Fame — top sovereign and most improved projects."},
+        {"name": "audit", "description": "Server-side compliance audit log — waiver, risk, scan, and finding events."},
     ],
 )
 
@@ -50,9 +52,11 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[],
 )
 
 app.include_router(auth_router)
+app.include_router(compliance_audit_router)
 app.include_router(sso_router)
 app.include_router(achievements_router)
 app.include_router(badges_router)

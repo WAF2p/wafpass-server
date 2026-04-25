@@ -550,41 +550,9 @@ ENV WAFPASS_CONTROLS_DIR=/app/controls
 
 ## Technical debt
 
-### Findings stored as JSONB, filtered in Python
-
-Filtering findings by `severity`, `pillar`, and `status` via `GET /runs/{id}/findings` loads the entire `findings` JSONB column and filters in Python. For large runs this is wasteful.
-
-**Fix:** Either a separate `findings` table (one row per finding, with indexed columns) or PostgreSQL `jsonb_array_elements` for server-side filtering.
-
-### Date/time fields as TEXT
-
-`expires`, `accepted_at` in waivers and risk acceptances are stored as TEXT (ISO date strings) rather than `DATE`/`TIMESTAMPTZ`. This was intentional for flexibility (the dashboard sends whatever string the user typed) but means no database-level date validation or expiry querying.
-
-**Fix:** Add a proper date column + migration. For now, expiry checks are done in the dashboard by comparing date strings.
-
-### Inconsistent response envelope
-
-The runs router returns raw lists; the controls router wraps in `{data, meta}`. This should be unified but is a breaking API change.
-
-### SSO secrets stored as plaintext in JSONB
-
-Client secrets (OIDC) and SP private keys (SAML2) are stored unencrypted in the `sso_configs.config` JSONB column. Anyone with database read access can extract these. **Fix:** encrypt sensitive fields at rest before writing to DB, using a KMS-backed key or a dedicated secrets manager (Vault, AWS Secrets Manager).
-
 ### No LDAP (Phase 3+)
 
 OIDC and SAML2 are live. LDAP / Kerberos bind against Active Directory is planned for a future release. The `auth/providers/base.py` protocol is ready for an `ldap.py` implementation.
-
-### Refresh token rotation not yet implemented
-
-Currently a refresh token can be reused until it expires or is explicitly revoked via `POST /auth/logout`. Rotation (issue a new refresh token on every `/auth/refresh` call and revoke the old one) would improve security against stolen tokens.
-
-### No pagination on runs list
-
-`GET /runs` supports `limit` and `offset` but the dashboard fetches `limit=100` and paginates in the browser. At large scale (10k+ runs) this wastes bandwidth. A cursor-based pagination scheme would be more robust.
-
-### `wafpass_server.main` version string
-
-The FastAPI app has `version="0.3.0"` hardcoded in `main.py`. This was not bumped in v0.4.0 and is inconsistent with `pyproject.toml` and `VERSION`. Fix: read from `importlib.metadata.version("wafpass-server")`.
 
 ---
 

@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Re-export control schema types from wafpass-core so callers only need one import.
 from wafpass.control_schema import WizardCheck, WizardControl  # noqa: F401
@@ -19,10 +19,11 @@ class Meta(BaseModel):
     total: int | None = None
     page: int | None = None
     per_page: int | None = None
+    next_cursor: str | None = None
 
 
 class Envelope(BaseModel, Generic[T]):
-    """Consistent API response wrapper used by all /controls endpoints."""
+    """Consistent API response wrapper used by all endpoints."""
 
     data: T
     meta: Meta = Field(default_factory=Meta)
@@ -50,6 +51,8 @@ class FindingSchema(BaseModel):
     remediation: str
     example: dict[str, Any] | None = None
 
+    model_config = ConfigDict(from_attributes=True)
+
 
 class ControlCheckMetaSchema(BaseModel):
     id: str
@@ -72,18 +75,37 @@ class ControlMetaSchema(BaseModel):
     checks: list[ControlCheckMetaSchema] = Field(default_factory=list)
 
 
+def _coerce_date(v: object) -> date | None:
+    """Accept a date object, ISO date string, or empty string; reject anything else."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, date):
+        return v
+    if isinstance(v, str):
+        try:
+            return date.fromisoformat(v)
+        except ValueError as exc:
+            raise ValueError(f"Invalid date format '{v}' — expected YYYY-MM-DD") from exc
+    raise TypeError(f"Expected date string or None, got {type(v).__name__}")
+
+
 class WaiverUpsert(BaseModel):
     reason: str = ""
     owner: str = ""
-    expires: str = ""
+    expires: date | None = None
     project: str = ""
+
+    @field_validator("expires", mode="before")
+    @classmethod
+    def _parse_expires(cls, v: object) -> date | None:
+        return _coerce_date(v)
 
 
 class WaiverOut(BaseModel):
     id: str
     reason: str
     owner: str
-    expires: str
+    expires: date | None
     project: str
     created_at: datetime
     updated_at: datetime
@@ -101,9 +123,14 @@ class RiskAcceptanceUpsert(BaseModel):
     notes: str = ""
     risk_level: str = "accepted"
     residual_risk: str = "medium"
-    expires: str = ""
-    accepted_at: str = ""
+    expires: date | None = None
+    accepted_at: date | None = None
     project: str = ""
+
+    @field_validator("expires", "accepted_at", mode="before")
+    @classmethod
+    def _parse_dates(cls, v: object) -> date | None:
+        return _coerce_date(v)
 
 
 class RiskAcceptanceOut(BaseModel):
@@ -117,8 +144,8 @@ class RiskAcceptanceOut(BaseModel):
     notes: str
     risk_level: str
     residual_risk: str
-    expires: str
-    accepted_at: str
+    expires: date | None
+    accepted_at: date | None
     project: str
     created_at: datetime
     updated_at: datetime
@@ -215,6 +242,39 @@ class AchievementOut(BaseModel):
     verification_token: str
     snapshot_jsonb: dict[str, Any]
     achieved_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Compliance audit event schemas ───────────────────────────────────────────
+
+
+class ComplianceAuditEventIn(BaseModel):
+    client_id: str = ""
+    actor: str = ""
+    category: str          # waiver|risk|scan|finding
+    action: str
+    subject_id: str = ""
+    subject_type: str = ""
+    summary: str = ""
+    timestamp: str = ""    # ISO 8601 — dashboard-provided event time; falls back to server now()
+    before: Any | None = None
+    after: Any | None = None
+
+
+class ComplianceAuditEventOut(BaseModel):
+    id: uuid.UUID
+    client_id: str
+    actor: str
+    category: str
+    action: str
+    subject_id: str
+    subject_type: str
+    summary: str
+    before: Any | None
+    after: Any | None
+    timestamp: datetime
+    created_by: uuid.UUID | None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, Text
+from sqlalchemy import Boolean, Date, DateTime, Integer, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -45,12 +45,18 @@ class UserAuditLog(Base):
 
 
 class RefreshToken(Base):
-    """Hashed refresh token records — revoked on logout."""
+    """Hashed refresh token records — rotated on every /auth/refresh call.
+
+    All tokens in a rotation chain share the same ``family_id``.  Presenting a
+    revoked token from a known family triggers family-wide revocation (stolen
+    token detection).
+    """
     __tablename__ = "refresh_tokens"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    family_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, default=uuid.uuid4)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -76,7 +82,7 @@ class Waiver(Base):
     id: Mapped[str] = mapped_column(Text, primary_key=True)  # control_id
     reason: Mapped[str] = mapped_column(Text, default="")
     owner: Mapped[str] = mapped_column(Text, default="")
-    expires: Mapped[str] = mapped_column(Text, default="")
+    expires: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     project: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -95,8 +101,8 @@ class RiskAcceptance(Base):
     notes: Mapped[str] = mapped_column(Text, default="")
     risk_level: Mapped[str] = mapped_column(Text, default="accepted")
     residual_risk: Mapped[str] = mapped_column(Text, default="medium")
-    expires: Mapped[str] = mapped_column(Text, default="")
-    accepted_at: Mapped[str] = mapped_column(Text, default="")
+    expires: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
+    accepted_at: Mapped[date | None] = mapped_column(Date, nullable=True, default=None)
     project: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -218,6 +224,42 @@ class ProjectAchievement(Base):
     verification_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     snapshot_jsonb: Mapped[dict] = mapped_column(JSONB, default=dict)        # pillar_scores snapshot
     achieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ComplianceAuditEvent(Base):
+    """One row per compliance audit event emitted by the dashboard (waiver/risk/scan/finding)."""
+    __tablename__ = "compliance_audit_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[str] = mapped_column(Text, default="", index=True)  # dashboard-local id (for dedup)
+    actor: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    category: Mapped[str] = mapped_column(Text, nullable=False)            # waiver|risk|scan|finding
+    action: Mapped[str] = mapped_column(Text, nullable=False)              # waiver_created|scan_received|etc.
+    subject_id: Mapped[str] = mapped_column(Text, default="")
+    subject_type: Mapped[str] = mapped_column(Text, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    before: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    after: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+
+class RunFinding(Base):
+    """One row per finding — normalised out of runs.findings for indexed filtering."""
+    __tablename__ = "run_findings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    check_id: Mapped[str] = mapped_column(Text, default="")
+    check_title: Mapped[str] = mapped_column(Text, default="")
+    control_id: Mapped[str] = mapped_column(Text, default="")
+    pillar: Mapped[str] = mapped_column(Text, default="")
+    severity: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(Text, default="")
+    resource: Mapped[str] = mapped_column(Text, default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    remediation: Mapped[str] = mapped_column(Text, default="")
+    example: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
 
 class Run(Base):

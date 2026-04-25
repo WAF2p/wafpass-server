@@ -48,6 +48,24 @@ class Settings(BaseSettings):
     # Leave empty to allow any path accessible to the server process (dev/local only).
     wafpass_scan_base_dir: str = ""
 
+    # ── At-rest encryption for SSO secrets ───────────────────────────────────
+    # Backend: "local" (default) | "aws_sm" | "vault_transit"
+    wafpass_secrets_backend: str = "local"
+
+    # Local backend — provide a Fernet-compatible key (32 bytes, URL-safe base64)
+    # or any passphrase (PBKDF2-derived).  Defaults to derivation from
+    # WAFPASS_JWT_SECRET when empty — set this explicitly in production.
+    wafpass_encryption_key: str = ""
+
+    # AWS Secrets Manager backend
+    aws_region: str = "us-east-1"
+
+    # HashiCorp Vault Transit backend
+    vault_addr: str = "http://127.0.0.1:8200"
+    vault_token: str = ""
+    vault_transit_key: str = "wafpass"
+    vault_transit_mount: str = "transit"
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

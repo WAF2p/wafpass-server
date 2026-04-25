@@ -7,11 +7,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import func, select
+
+from wafpass_server.schemas import Envelope
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.auth.deps import require_role
 from wafpass_server.database import get_db
-from wafpass_server.models import ProjectAchievement, ProjectPassport, Run, User
+from wafpass_server.models import ProjectAchievement, ProjectPassport, User
 
 router = APIRouter(tags=["leaderboard"])
 
@@ -38,11 +40,11 @@ class LeaderboardOut(BaseModel):
     most_improved: list[LeaderboardEntry]
 
 
-@router.get("/leaderboard", response_model=LeaderboardOut)
+@router.get("/leaderboard", response_model=Envelope[LeaderboardOut])
 async def get_leaderboard(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
-) -> LeaderboardOut:
+) -> Envelope[LeaderboardOut]:
     now = datetime.now(timezone.utc)
     thirty_days_ago = now - timedelta(days=30)
 
@@ -139,4 +141,4 @@ async def get_leaderboard(
             tiers_gained=improved_count_map[project],
         ))
 
-    return LeaderboardOut(top_sovereign=top_sovereign, most_improved=most_improved)
+    return Envelope(data=LeaderboardOut(top_sovereign=top_sovereign, most_improved=most_improved))

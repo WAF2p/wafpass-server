@@ -23,8 +23,63 @@ from wafpass_server.auth.jwt_utils import create_access_token
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import GroupRoleMapping, RefreshToken, SsoConfig, User, UserAuditLog
+from wafpass_server.secret_enc import decrypt_field, encrypt_field, is_encrypted_blob
 
 router = APIRouter(tags=["sso"])
+
+# ── Sensitive field registry ──────────────────────────────────────────────────
+
+# Fields encrypted at rest before writing to sso_configs.config.
+_SENSITIVE: dict[str, list[str]] = {
+    "oidc":  ["client_secret"],
+    "saml2": ["sp_private_key"],
+}
+
+
+async def _encrypt_config(provider: str, new_config: dict, existing_config: dict | None) -> dict:
+    """Return a copy of *new_config* with sensitive fields encrypted.
+
+    * Plaintext values are encrypted using the configured backend.
+    * ``"***"`` means the admin left the field unchanged — the existing
+      encrypted blob is preserved.
+    * Already-encrypted blobs are kept as-is (idempotent).
+    * Empty/missing values are removed from the stored config.
+    """
+    result = dict(new_config)
+    for field in _SENSITIVE.get(provider, []):
+        val = result.get(field, "")
+        if not val or val == "***":
+            if existing_config and existing_config.get(field):
+                result[field] = existing_config[field]   # keep existing blob
+            else:
+                result.pop(field, None)
+        elif is_encrypted_blob(val):
+            pass  # already encrypted — leave unchanged
+        else:
+            result[field] = await encrypt_field(
+                val,
+                aws_secret_name=f"wafpass/sso/{provider}/{field}",
+            )
+    return result
+
+
+async def _decrypt_config(provider: str, config: dict) -> dict:
+    """Return a copy of *config* with sensitive fields decrypted for runtime use."""
+    result = dict(config)
+    for field in _SENSITIVE.get(provider, []):
+        if result.get(field):
+            result[field] = await decrypt_field(result[field])
+    return result
+
+
+def _redact_config(provider: str, config: dict) -> dict:
+    """Return a copy of *config* with sensitive fields replaced by ``"***"``."""
+    result = dict(config)
+    for field in _SENSITIVE.get(provider, []):
+        if result.get(field):
+            result[field] = "***"
+    return result
+
 
 # ── Optional SAML2 import ─────────────────────────────────────────────────────
 
@@ -77,6 +132,7 @@ async def _issue_tokens(db: AsyncSession, user: User) -> tuple[str, str]:
     rt = RefreshToken(
         user_id=user.id,
         token_hash=hashlib.sha256(raw_refresh.encode()).hexdigest(),
+        family_id=uuid.uuid4(),
         expires_at=datetime.now(timezone.utc) + timedelta(days=settings.wafpass_jwt_refresh_days),
     )
     db.add(rt)
@@ -202,9 +258,17 @@ class GroupRoleMappingUpdate(BaseModel):
 async def list_sso_configs(
     _: Annotated[User, Depends(require_role("admin"))],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> list[SsoConfig]:
+) -> list[SsoConfigOut]:
     result = await db.execute(select(SsoConfig))
-    return list(result.scalars().all())
+    return [
+        SsoConfigOut(
+            id=row.id,
+            enabled=row.enabled,
+            config=_redact_config(row.id, row.config),
+            updated_at=row.updated_at,
+        )
+        for row in result.scalars().all()
+    ]
 
 
 @router.put("/sso/config/{provider}", response_model=SsoConfigOut)
@@ -213,20 +277,26 @@ async def upsert_sso_config(
     payload: SsoConfigUpdate,
     acting_user: Annotated[User, Depends(require_role("admin"))],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> SsoConfig:
+) -> SsoConfigOut:
     if provider not in ("oidc", "saml2"):
         raise HTTPException(400, detail="Provider must be 'oidc' or 'saml2'.")
     cfg = await _get_cfg(db, provider)
+    encrypted = await _encrypt_config(provider, payload.config, cfg.config if cfg else None)
     if cfg is None:
-        cfg = SsoConfig(id=provider, enabled=payload.enabled, config=payload.config, updated_by=acting_user.id)
+        cfg = SsoConfig(id=provider, enabled=payload.enabled, config=encrypted, updated_by=acting_user.id)
         db.add(cfg)
     else:
         cfg.enabled = payload.enabled
-        cfg.config = payload.config
+        cfg.config = encrypted
         cfg.updated_by = acting_user.id
     await db.commit()
     await db.refresh(cfg)
-    return cfg
+    return SsoConfigOut(
+        id=cfg.id,
+        enabled=cfg.enabled,
+        config=_redact_config(cfg.id, cfg.config),
+        updated_at=cfg.updated_at,
+    )
 
 
 @router.delete("/sso/config/{provider}", status_code=204)
@@ -429,7 +499,7 @@ async def oidc_callback(
     cfg_row = await _get_cfg(db, "oidc")
     if not cfg_row or not cfg_row.enabled:
         raise HTTPException(404, detail="OIDC SSO is not enabled.")
-    cfg = cfg_row.config
+    cfg = await _decrypt_config("oidc", cfg_row.config)
     frontend_url = cfg.get("frontend_url", "http://localhost:5173")
 
     if error:
@@ -540,7 +610,9 @@ async def saml_metadata(
     cfg_row = await _get_cfg(db, "saml2")
     if not cfg_row:
         raise HTTPException(404, detail="SAML2 is not configured.")
-    saml_cfg = OneLogin_Saml2_Settings(_saml_settings_dict(cfg_row.config), sp_validation_only=True)
+    saml_cfg = OneLogin_Saml2_Settings(
+        _saml_settings_dict(await _decrypt_config("saml2", cfg_row.config)), sp_validation_only=True
+    )
     metadata = saml_cfg.get_sp_metadata()
     return HTMLResponse(content=metadata, media_type="application/xml")
 
@@ -556,7 +628,7 @@ async def saml_login(
     cfg_row = await _get_cfg(db, "saml2")
     if not cfg_row or not cfg_row.enabled:
         raise HTTPException(404, detail="SAML2 SSO is not enabled.")
-    auth = OneLogin_Saml2_Auth(_saml_req(request), _saml_settings_dict(cfg_row.config))
+    auth = OneLogin_Saml2_Auth(_saml_req(request), _saml_settings_dict(await _decrypt_config("saml2", cfg_row.config)))
     return RedirectResponse(auth.login(), status_code=302)
 
 
@@ -571,7 +643,7 @@ async def saml_acs(
     cfg_row = await _get_cfg(db, "saml2")
     if not cfg_row or not cfg_row.enabled:
         raise HTTPException(404, detail="SAML2 SSO is not enabled.")
-    cfg = cfg_row.config
+    cfg = await _decrypt_config("saml2", cfg_row.config)
     frontend_url = cfg.get("frontend_url", "http://localhost:5173")
 
     form = await request.form()

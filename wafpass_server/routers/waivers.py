@@ -10,32 +10,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wafpass_server.auth.deps import require_role
 from wafpass_server.database import get_db
 from wafpass_server.models import User, Waiver
-from wafpass_server.schemas import WaiverOut, WaiverUpsert
+from wafpass_server.schemas import Envelope, WaiverOut, WaiverUpsert
 
 router = APIRouter(prefix="/waivers", tags=["waivers"])
 
 
-@router.get("", response_model=list[WaiverOut])
+@router.get("", response_model=Envelope[list[WaiverOut]])
 async def list_waivers(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
     project: str | None = Query(default=None),
-) -> list[Waiver]:
+) -> Envelope[list[WaiverOut]]:
     stmt = select(Waiver).order_by(Waiver.id)
     if project is not None:
         # Return global waivers (project="") plus project-specific ones
         stmt = stmt.where((Waiver.project == "") | (Waiver.project == project))
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return Envelope(data=list(result.scalars().all()))
 
 
-@router.put("/{waiver_id}", response_model=WaiverOut)
+@router.put("/{waiver_id}", response_model=Envelope[WaiverOut])
 async def upsert_waiver(
     waiver_id: str,
     payload: WaiverUpsert,
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("ciso"))],
-) -> Waiver:
+) -> Envelope[WaiverOut]:
     existing = await db.get(Waiver, waiver_id)
     if existing is None:
         waiver = Waiver(
@@ -54,7 +54,7 @@ async def upsert_waiver(
         waiver = existing
     await db.commit()
     await db.refresh(waiver)
-    return waiver
+    return Envelope(data=waiver)
 
 
 @router.delete("/{waiver_id}", status_code=204)

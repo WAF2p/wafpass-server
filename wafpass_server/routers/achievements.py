@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wafpass_server.auth.deps import require_role
 from wafpass_server.database import get_db
 from wafpass_server.models import ProjectAchievement, Run, User
-from wafpass_server.schemas import AchievementOut
+from wafpass_server.schemas import AchievementOut, Envelope
 
 router = APIRouter(tags=["achievements"])
 
@@ -91,33 +91,33 @@ async def evaluate_and_record_achievements(db: AsyncSession, run: Run) -> list[P
 # ── Authenticated endpoints ───────────────────────────────────────────────────
 
 
-@router.get("/achievements", response_model=list[AchievementOut])
+@router.get("/achievements", response_model=Envelope[list[AchievementOut]])
 async def list_achievements(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
     project: str | None = Query(default=None),
-) -> list[ProjectAchievement]:
+) -> Envelope[list[AchievementOut]]:
     stmt = select(ProjectAchievement).order_by(
         ProjectAchievement.project, ProjectAchievement.tier_level
     )
     if project:
         stmt = stmt.where(ProjectAchievement.project == project)
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return Envelope(data=list(result.scalars().all()))
 
 
-@router.get("/achievements/{project}", response_model=list[AchievementOut])
+@router.get("/achievements/{project}", response_model=Envelope[list[AchievementOut]])
 async def list_project_achievements(
     project: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
-) -> list[ProjectAchievement]:
+) -> Envelope[list[AchievementOut]]:
     result = await db.execute(
         select(ProjectAchievement)
         .where(ProjectAchievement.project == project)
         .order_by(ProjectAchievement.tier_level)
     )
-    return list(result.scalars().all())
+    return Envelope(data=list(result.scalars().all()))
 
 
 # ── Public verification endpoint ──────────────────────────────────────────────

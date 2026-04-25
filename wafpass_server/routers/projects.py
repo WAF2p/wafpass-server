@@ -10,39 +10,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wafpass_server.auth.deps import require_role
 from wafpass_server.database import get_db
 from wafpass_server.models import ProjectPassport, User
-from wafpass_server.schemas import ProjectPassportOut, ProjectPassportUpsert
+from wafpass_server.schemas import Envelope, ProjectPassportOut, ProjectPassportUpsert
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
-@router.get("/passports", response_model=list[ProjectPassportOut])
+@router.get("/passports", response_model=Envelope[list[ProjectPassportOut]])
 async def list_passports(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
-) -> list[ProjectPassport]:
+) -> Envelope[list[ProjectPassportOut]]:
     result = await db.execute(select(ProjectPassport).order_by(ProjectPassport.project))
-    return list(result.scalars().all())
+    return Envelope(data=list(result.scalars().all()))
 
 
-@router.get("/{project}/passport", response_model=ProjectPassportOut)
+@router.get("/{project}/passport", response_model=Envelope[ProjectPassportOut])
 async def get_passport(
     project: str,
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
-) -> ProjectPassport:
+) -> Envelope[ProjectPassportOut]:
     row = await db.get(ProjectPassport, project)
     if row is None:
         raise HTTPException(status_code=404, detail="Passport not found")
-    return row
+    return Envelope(data=row)
 
 
-@router.put("/{project}/passport", response_model=ProjectPassportOut)
+@router.put("/{project}/passport", response_model=Envelope[ProjectPassportOut])
 async def upsert_passport(
     project: str,
     payload: ProjectPassportUpsert,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, Depends(require_role("architect"))],
-) -> ProjectPassport:
+) -> Envelope[ProjectPassportOut]:
     row = await db.get(ProjectPassport, project)
     if row is None:
         row = ProjectPassport(project=project)
@@ -63,7 +63,7 @@ async def upsert_passport(
     row.updated_by = current_user.username
     await db.commit()
     await db.refresh(row)
-    return row
+    return Envelope(data=row)
 
 
 @router.delete("/{project}/passport", status_code=204)

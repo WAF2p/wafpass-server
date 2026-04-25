@@ -29,7 +29,7 @@ from wafpass_server.auth.deps import IngestAuth, require_ingest, require_role
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import ApiKeyUsageLog, Run, User
-from wafpass_server.schemas import RunSummary
+from wafpass_server.schemas import Envelope, FindingSchema, RunSummary
 
 router = APIRouter(prefix="/scan", tags=["scan"])
 
@@ -111,13 +111,13 @@ async def scan_status(
     }
 
 
-@router.post("", response_model=RunSummary, status_code=201)
+@router.post("", response_model=Envelope[RunSummary], status_code=201)
 async def trigger_scan(
     request: Request,
     payload: ScanRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
     auth: Annotated[IngestAuth, Depends(require_ingest)],
-) -> Run:
+) -> Envelope[RunSummary]:
     """Trigger a WAF++ scan on a server-side path and persist the result."""
 
     if not getattr(settings, "wafpass_scan_enabled", True):
@@ -278,6 +278,11 @@ async def trigger_scan(
     await db.refresh(run)
 
     from wafpass_server.routers.achievements import evaluate_and_record_achievements
+    from wafpass_server.routers.runs import _finding_rows
+    if findings:
+        db.add_all(_finding_rows(run.id, findings))
+        await db.commit()
+
     await evaluate_and_record_achievements(db, run)
 
     # Write a usage log row when a DB-tracked API key was used
@@ -294,4 +299,4 @@ async def trigger_scan(
         ))
         await db.commit()
 
-    return run
+    return Envelope(data=RunSummary.model_validate(run, from_attributes=True))

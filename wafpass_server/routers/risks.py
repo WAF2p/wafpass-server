@@ -10,31 +10,31 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wafpass_server.auth.deps import require_role
 from wafpass_server.database import get_db
 from wafpass_server.models import RiskAcceptance, User
-from wafpass_server.schemas import RiskAcceptanceOut, RiskAcceptanceUpsert
+from wafpass_server.schemas import Envelope, RiskAcceptanceOut, RiskAcceptanceUpsert
 
 router = APIRouter(prefix="/risks", tags=["risks"])
 
 
-@router.get("", response_model=list[RiskAcceptanceOut])
+@router.get("", response_model=Envelope[list[RiskAcceptanceOut]])
 async def list_risks(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
     project: str | None = Query(default=None),
-) -> list[RiskAcceptance]:
+) -> Envelope[list[RiskAcceptanceOut]]:
     stmt = select(RiskAcceptance).order_by(RiskAcceptance.id)
     if project is not None:
         stmt = stmt.where((RiskAcceptance.project == "") | (RiskAcceptance.project == project))
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    return Envelope(data=list(result.scalars().all()))
 
 
-@router.put("/{risk_id}", response_model=RiskAcceptanceOut)
+@router.put("/{risk_id}", response_model=Envelope[RiskAcceptanceOut])
 async def upsert_risk(
     risk_id: str,
     payload: RiskAcceptanceUpsert,
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("ciso"))],
-) -> RiskAcceptance:
+) -> Envelope[RiskAcceptanceOut]:
     existing = await db.get(RiskAcceptance, risk_id)
     if existing is None:
         risk = RiskAcceptance(
@@ -69,7 +69,7 @@ async def upsert_risk(
         risk = existing
     await db.commit()
     await db.refresh(risk)
-    return risk
+    return Envelope(data=risk)
 
 
 @router.delete("/{risk_id}", status_code=204)

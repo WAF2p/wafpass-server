@@ -1,29 +1,65 @@
 """POST/GET /runs endpoints."""
 from __future__ import annotations
 
+import base64
 import uuid
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.auth.deps import IngestAuth, get_current_user, require_ingest, require_role
 from wafpass_server.database import get_db
-from wafpass_server.models import ApiKeyUsageLog, Run, User, UserAuditLog
+from wafpass_server.models import ApiKeyUsageLog, Run, RunFinding, User, UserAuditLog
 from wafpass_server.routers.achievements import evaluate_and_record_achievements
-from wafpass_server.schemas import ControlMetaSchema, FindingSchema, RunCreate, RunDetail, RunSummary, SecretFindingSchema
+from wafpass_server.schemas import ControlMetaSchema, Envelope, FindingSchema, Meta, RunCreate, RunDetail, RunSummary, SecretFindingSchema
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
 
-@router.post("", response_model=RunSummary, status_code=201)
+def _encode_cursor(run: Run) -> str:
+    raw = f"{run.created_at.isoformat()}|{run.id}"
+    return base64.urlsafe_b64encode(raw.encode()).decode()
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
+    raw = base64.urlsafe_b64decode(cursor.encode()).decode()
+    ts_str, id_str = raw.split("|", 1)
+    ts = datetime.fromisoformat(ts_str)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts, uuid.UUID(id_str)
+
+
+def _finding_rows(run_id: uuid.UUID, findings: list[FindingSchema]) -> list[RunFinding]:
+    """Build RunFinding ORM rows from a list of FindingSchema objects."""
+    return [
+        RunFinding(
+            run_id=run_id,
+            check_id=f.check_id,
+            check_title=f.check_title,
+            control_id=f.control_id,
+            pillar=f.pillar,
+            severity=f.severity,
+            status=f.status,
+            resource=f.resource,
+            message=f.message,
+            remediation=f.remediation,
+            example=f.example,
+        )
+        for f in findings
+    ]
+
+
+@router.post("", response_model=Envelope[RunSummary], status_code=201)
 async def create_run(
     request: Request,
     payload: RunCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     auth: Annotated[IngestAuth, Depends(require_ingest)],
-) -> Run:
+) -> Envelope[RunSummary]:
     """Ingest a wafpass-result.json payload.
 
     Accepts either a Bearer JWT (any role) or the ``X-Api-Key`` header so that
@@ -51,6 +87,10 @@ async def create_run(
     db.add(run)
     await db.commit()
     await db.refresh(run)
+
+    if payload.findings:
+        db.add_all(_finding_rows(run.id, payload.findings))
+        await db.commit()
 
     await evaluate_and_record_achievements(db, run)
 
@@ -84,52 +124,77 @@ async def create_run(
         ))
         await db.commit()
 
-    return run
+    return Envelope(data=RunSummary.model_validate(run, from_attributes=True))
 
 
-@router.get("", response_model=list[RunSummary])
+@router.get("", response_model=Envelope[list[RunSummary]])
 async def list_runs(
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
     limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
+    cursor: str | None = Query(default=None),
     project: str | None = Query(default=None),
     stage: str | None = Query(default=None),
-) -> list[Run]:
-    stmt = select(Run).order_by(Run.created_at.desc()).limit(limit).offset(offset)
+) -> Envelope[list[RunSummary]]:
+    """Return a page of runs ordered by created_at DESC.
+
+    Pass the ``cursor`` value from ``meta.next_cursor`` to retrieve the next
+    page.  When ``meta.next_cursor`` is null there are no more pages.
+    """
+    stmt = select(Run).order_by(Run.created_at.desc(), Run.id.desc()).limit(limit)
+
     if project:
         stmt = stmt.where(Run.project == project)
     if stage:
         stmt = stmt.where(Run.stage == stage)
+
+    if cursor:
+        try:
+            cursor_ts, cursor_id = _decode_cursor(cursor)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="Invalid cursor") from exc
+        stmt = stmt.where(
+            or_(
+                Run.created_at < cursor_ts,
+                and_(Run.created_at == cursor_ts, Run.id < cursor_id),
+            )
+        )
+
     result = await db.execute(stmt)
-    return list(result.scalars().all())
+    rows = list(result.scalars().all())
+
+    next_cursor = _encode_cursor(rows[-1]) if len(rows) == limit else None
+    return Envelope(
+        data=[RunSummary.model_validate(r, from_attributes=True) for r in rows],
+        meta=Meta(next_cursor=next_cursor),
+    )
 
 
-@router.get("/{run_id}", response_model=RunDetail)
+@router.get("/{run_id}", response_model=Envelope[RunDetail])
 async def get_run(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
-) -> Run:
+) -> Envelope[RunDetail]:
     run = await db.get(Run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    return run
+    return Envelope(data=RunDetail.model_validate(run, from_attributes=True))
 
 
-@router.get("/{run_id}/controls", response_model=list[ControlMetaSchema])
+@router.get("/{run_id}/controls", response_model=Envelope[list[ControlMetaSchema]])
 async def get_controls(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
-) -> list[dict]:
+) -> Envelope[list[dict]]:
     run = await db.get(Run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    return run.controls_meta or []
+    return Envelope(data=run.controls_meta or [])
 
 
-@router.get("/{run_id}/findings", response_model=list[FindingSchema])
+@router.get("/{run_id}/findings", response_model=Envelope[list[FindingSchema]])
 async def get_findings(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -137,16 +202,18 @@ async def get_findings(
     severity: str | None = Query(default=None),
     pillar: str | None = Query(default=None),
     status: str | None = Query(default=None),
-) -> list[dict]:
-    run = await db.get(Run, run_id)
-    if run is None:
+) -> Envelope[list[FindingSchema]]:
+    run_exists = await db.get(Run, run_id)
+    if run_exists is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    findings: list[dict] = run.findings or []
+    stmt = select(RunFinding).where(RunFinding.run_id == run_id)
     if severity:
-        findings = [f for f in findings if f.get("severity", "").upper() == severity.upper()]
+        stmt = stmt.where(func.lower(RunFinding.severity) == severity.lower())
     if pillar:
-        findings = [f for f in findings if f.get("pillar", "").upper() == pillar.upper()]
+        stmt = stmt.where(func.lower(RunFinding.pillar) == pillar.lower())
     if status:
-        findings = [f for f in findings if f.get("status", "").upper() == status.upper()]
-    return findings
+        stmt = stmt.where(func.lower(RunFinding.status) == status.lower())
+
+    result = await db.execute(stmt)
+    return Envelope(data=list(result.scalars().all()))

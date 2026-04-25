@@ -9,7 +9,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.auth.deps import ROLE_HIERARCHY, get_current_user, require_role
@@ -75,6 +75,7 @@ class RefreshRequest(BaseModel):
 
 class AccessTokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
 
 
@@ -112,6 +113,7 @@ async def login(
     rt = RefreshToken(
         user_id=user.id,
         token_hash=_hash(raw_refresh),
+        family_id=uuid.uuid4(),
         expires_at=datetime.now(timezone.utc) + timedelta(days=settings.wafpass_jwt_refresh_days),
     )
     db.add(rt)
@@ -130,21 +132,36 @@ async def login(
 
 @router.post("/refresh", response_model=AccessTokenResponse)
 async def refresh_token(
+    request: Request,
     payload: RefreshRequest,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> dict:
-    """Exchange a valid refresh token for a new access token."""
+    """Rotate a refresh token: revoke the presented one, issue a fresh one.
+
+    If a revoked token is presented it indicates a replay attack — every token
+    in the same family is immediately revoked, forcing re-authentication on all
+    devices that shared this token chain.
+    """
     token_hash = _hash(payload.refresh_token)
-    result = await db.execute(
-        select(RefreshToken).where(
-            RefreshToken.token_hash == token_hash,
-            RefreshToken.revoked.is_(False),
-        )
-    )
+    result = await db.execute(select(RefreshToken).where(RefreshToken.token_hash == token_hash))
     rt = result.scalar_one_or_none()
 
     if rt is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found or revoked.")
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="Refresh token not found.")
+
+    if rt.revoked:
+        # Replay of an already-rotated token — assume theft, invalidate the whole family.
+        await db.execute(
+            update(RefreshToken)
+            .where(RefreshToken.family_id == rt.family_id)
+            .values(revoked=True)
+        )
+        await _audit(db, rt.user_id, "token.family_revoked",
+                     {"family_id": str(rt.family_id), "reason": "revoked_token_replay"},
+                     ip=_ip(request))
+        await db.commit()
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                            detail="Refresh token already used — all sessions invalidated. Please log in again.")
 
     if rt.expires_at.replace(tzinfo=timezone.utc) < datetime.now(timezone.utc):
         rt.revoked = True
@@ -153,10 +170,24 @@ async def refresh_token(
 
     user = await db.get(User, rt.user_id)
     if user is None or not user.is_active:
+        rt.revoked = True
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive.")
+
+    # Rotate: revoke the old token, issue a new one in the same family.
+    rt.revoked = True
+    raw_new = secrets.token_urlsafe(48)
+    db.add(RefreshToken(
+        user_id=user.id,
+        token_hash=_hash(raw_new),
+        family_id=rt.family_id,
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.wafpass_jwt_refresh_days),
+    ))
+    await db.commit()
 
     return {
         "access_token": create_access_token(user.id, user.username, user.role),
+        "refresh_token": raw_new,
         "token_type": "bearer",
     }
 

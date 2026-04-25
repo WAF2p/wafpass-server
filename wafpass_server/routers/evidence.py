@@ -19,6 +19,7 @@ from wafpass_server.auth.deps import require_role
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import Evidence, Run, User
+from wafpass_server.schemas import Envelope
 
 router = APIRouter(tags=["evidence"])
 
@@ -186,7 +187,7 @@ _PUBLIC_HTML_WRAPPER = """\
 
 # ── CRUD endpoints ────────────────────────────────────────────────────────────
 
-@router.post("/evidence", response_model=EvidenceOut, status_code=201)
+@router.post("/evidence", response_model=Envelope[EvidenceOut], status_code=201)
 async def create_evidence(
     payload: EvidenceCreate,
     acting_user: Annotated[User, Depends(require_role("engineer"))],
@@ -225,35 +226,35 @@ async def create_evidence(
     db.add(row)
     await db.commit()
     await db.refresh(row)
-    return EvidenceOut.from_row(row)
+    return Envelope(data=EvidenceOut.from_row(row))
 
 
-@router.get("/evidence", response_model=list[EvidenceOut])
+@router.get("/evidence", response_model=Envelope[list[EvidenceOut]])
 async def list_evidence(
     _: Annotated[User, Depends(require_role("clevel"))],
     db: Annotated[AsyncSession, Depends(get_db)],
     project: str | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> list[EvidenceOut]:
+) -> Envelope[list[EvidenceOut]]:
     stmt = select(Evidence).order_by(Evidence.created_at.desc()).limit(limit).offset(offset)
     if project:
         stmt = stmt.where(Evidence.project == project)
     result = await db.execute(stmt)
-    return [EvidenceOut.from_row(r) for r in result.scalars().all()]
+    return Envelope(data=[EvidenceOut.from_row(r) for r in result.scalars().all()])
 
 
-@router.get("/evidence/{evidence_id}", response_model=EvidenceOut)
+@router.get("/evidence/{evidence_id}", response_model=Envelope[EvidenceOut])
 async def get_evidence(
     evidence_id: str,
     _: Annotated[User, Depends(require_role("clevel"))],
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> EvidenceOut:
+) -> Envelope[EvidenceOut]:
     result = await db.execute(select(Evidence).where(Evidence.id == evidence_id))
     row = result.scalar_one_or_none()
     if row is None:
         raise HTTPException(404, detail="Evidence package not found.")
-    return EvidenceOut.from_row(row)
+    return Envelope(data=EvidenceOut.from_row(row))
 
 
 @router.get("/evidence/{evidence_id}/snapshot")
