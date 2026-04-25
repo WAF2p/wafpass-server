@@ -1,7 +1,10 @@
 """Application configuration via environment variables."""
 from __future__ import annotations
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_DEFAULT_JWT_SECRET = "change-me-in-production-wafpass-secret-key"
 
 
 class Settings(BaseSettings):
@@ -19,7 +22,7 @@ class Settings(BaseSettings):
 
     # ── Authentication ────────────────────────────────────────────────────────
     # IMPORTANT: set a strong random value in production.
-    wafpass_jwt_secret: str = "change-me-in-production-wafpass-secret-key"
+    wafpass_jwt_secret: str = _DEFAULT_JWT_SECRET
     # Access token lifetime in minutes (default 60 min).
     wafpass_jwt_expire_minutes: int = 60
     # Refresh token lifetime in days (default 7 days).
@@ -65,6 +68,24 @@ class Settings(BaseSettings):
     vault_token: str = ""
     vault_transit_key: str = "wafpass"
     vault_transit_mount: str = "transit"
+
+    @model_validator(mode="after")
+    def _require_non_default_secrets_in_production(self) -> "Settings":
+        if self.wafpass_env == "local":
+            return self
+        if self.wafpass_jwt_secret == _DEFAULT_JWT_SECRET:
+            raise ValueError(
+                "WAFPASS_JWT_SECRET must be changed from the default value. "
+                "Generate a random 32-byte secret and set it via the WAFPASS_JWT_SECRET "
+                "environment variable before starting in a non-local environment."
+            )
+        if not self.wafpass_encryption_key:
+            raise ValueError(
+                "WAFPASS_ENCRYPTION_KEY must be set in non-local environments. "
+                "Without it, SSO secrets are derived from WAFPASS_JWT_SECRET, "
+                "which is insecure if that secret is ever rotated or leaked."
+            )
+        return self
 
     @property
     def cors_origins_list(self) -> list[str]:

@@ -419,9 +419,11 @@ def _sign_state(nonce: str) -> str:
     )
 
 
-def _verify_state(state: str) -> None:
+def _verify_state(state: str) -> str:
+    """Verify the signed state JWT and return the embedded nonce."""
     try:
-        _jwt.decode(state, settings.wafpass_jwt_secret, algorithms=["HS256"])
+        payload = _jwt.decode(state, settings.wafpass_jwt_secret, algorithms=["HS256"])
+        return payload["nonce"]
     except Exception:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Invalid or expired SSO state.")
 
@@ -451,6 +453,25 @@ async def _oidc_exchange_code(token_endpoint: str, code: str, cfg: dict) -> dict
         return resp.json()
 
 
+async def _oidc_fetch_signing_key(jwks_uri: str, token: str):
+    """Fetch the JWKS and return the signing key matching the token's kid header."""
+    import httpx
+    header = _jwt.get_unverified_header(token)
+    kid = header.get("kid")
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(jwks_uri)
+        resp.raise_for_status()
+        jwks = resp.json()
+    for key_data in jwks.get("keys", []):
+        if kid is None or key_data.get("kid") == kid:
+            kty = key_data.get("kty", "")
+            if kty == "RSA":
+                return _jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(key_data))
+            if kty == "EC":
+                return _jwt.algorithms.ECAlgorithm.from_jwk(json.dumps(key_data))
+    raise ValueError(f"No matching JWKS key found for kid={kid!r}")
+
+
 async def _oidc_userinfo(userinfo_endpoint: str, access_token: str) -> dict:
     import httpx
     async with httpx.AsyncClient(timeout=10) as client:
@@ -470,7 +491,8 @@ async def oidc_authorize(
     cfg = cfg_row.config
 
     discovery = await _oidc_discovery(cfg["discovery_url"])
-    state = _sign_state(secrets.token_hex(16))
+    nonce = secrets.token_hex(16)
+    state = _sign_state(nonce)
     scopes = cfg.get("scopes", ["openid", "profile", "email"])
     params = urlencode({
         "response_type": "code",
@@ -478,6 +500,7 @@ async def oidc_authorize(
         "redirect_uri": cfg["redirect_uri"],
         "scope": " ".join(scopes),
         "state": state,
+        "nonce": nonce,
     })
     # Allow overriding the browser-facing authorization endpoint separately from
     # the discovery URL — needed when the server reaches the IdP via an internal
@@ -508,7 +531,7 @@ async def oidc_callback(
         return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=missing_params", status_code=302)
 
     try:
-        _verify_state(state)
+        nonce = _verify_state(state)
         discovery = await _oidc_discovery(cfg["discovery_url"])
         tokens = await _oidc_exchange_code(discovery["token_endpoint"], code, cfg)
     except HTTPException:
@@ -518,10 +541,27 @@ async def oidc_callback(
 
     claims: dict = {}
     if "id_token" in tokens:
-        try:
-            claims = _jwt.decode(tokens["id_token"], options={"verify_signature": False})
-        except Exception:
-            pass
+        jwks_uri = discovery.get("jwks_uri", "")
+        if jwks_uri:
+            try:
+                signing_key = await _oidc_fetch_signing_key(jwks_uri, tokens["id_token"])
+                algs = discovery.get("id_token_signing_alg_values_supported", ["RS256"])
+                claims = _jwt.decode(
+                    tokens["id_token"],
+                    signing_key,
+                    algorithms=algs,
+                    audience=cfg["client_id"],
+                )
+                if claims.get("nonce") != nonce:
+                    return RedirectResponse(
+                        f"{frontend_url.rstrip('/')}?sso_error=invalid_nonce", status_code=302
+                    )
+            except Exception:
+                return RedirectResponse(
+                    f"{frontend_url.rstrip('/')}?sso_error=token_verification_failed", status_code=302
+                )
+        # No JWKS URI in discovery doc — fall through to userinfo
+
     if not claims and "userinfo_endpoint" in discovery:
         try:
             claims = await _oidc_userinfo(discovery["userinfo_endpoint"], tokens.get("access_token", ""))
