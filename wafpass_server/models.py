@@ -27,6 +27,7 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    prefs: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
@@ -62,6 +63,21 @@ class RefreshToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class ControlPack(Base):
+    """Versioned, immutable snapshot of the WAF++ control catalogue."""
+    __tablename__ = "control_packs"
+
+    version: Mapped[str] = mapped_column(Text, primary_key=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    control_count: Mapped[int] = mapped_column(Integer, default=0)
+    controls_snapshot: Mapped[list] = mapped_column(JSONB, default=list)  # full raw YAML dicts
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    imported_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    activated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+
+
 class Control(Base):
     __tablename__ = "controls"
 
@@ -71,6 +87,7 @@ class Control(Base):
     type: Mapped[list] = mapped_column(JSONB, default=list)
     description: Mapped[str] = mapped_column(Text, default="")
     checks: Mapped[list] = mapped_column(JSONB, default=list)
+    regulatory_mapping: Mapped[list] = mapped_column(JSONB, default=list)
     source: Mapped[str] = mapped_column(Text, default="wafpass")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -260,6 +277,7 @@ class RunFinding(Base):
     message: Mapped[str] = mapped_column(Text, default="")
     remediation: Mapped[str] = mapped_column(Text, default="")
     example: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    regulatory_mapping: Mapped[list] = mapped_column(JSONB, default=list)
 
 
 class Run(Base):

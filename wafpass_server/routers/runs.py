@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import base64
+import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+
+logger = logging.getLogger(__name__)
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +52,7 @@ def _finding_rows(run_id: uuid.UUID, findings: list[FindingSchema]) -> list[RunF
             message=f.message,
             remediation=f.remediation,
             example=f.example,
+            regulatory_mapping=f.regulatory_mapping,
         )
         for f in findings
     ]
@@ -65,6 +70,22 @@ async def create_run(
     Accepts either a Bearer JWT (any role) or the ``X-Api-Key`` header so that
     CI/CD pipelines can push results without a user account.
     """
+    # Log incoming findings for debugging
+    logger.info("=== RUN PUSH DEBUG ===")
+    logger.info("Project: %s", payload.project)
+    logger.info("Branch: %s", payload.branch)
+    logger.info("Findings count: %d", len(payload.findings))
+    if payload.findings:
+        statuses = [f.status for f in payload.findings]
+        status_counts = {}
+        for s in statuses:
+            status_counts[s] = status_counts.get(s, 0) + 1
+        logger.info("Status counts: %s", status_counts)
+        # Log first 5 findings
+        for i, f in enumerate(payload.findings[:5]):
+            logger.info("  Finding[%d]: check_id=%s, status=%s, resource=%s", i, f.check_id, f.status, f.resource)
+    logger.info("=== END RUN PUSH DEBUG ===")
+
     run = Run(
         project=payload.project,
         branch=payload.branch,
@@ -87,6 +108,21 @@ async def create_run(
     db.add(run)
     await db.commit()
     await db.refresh(run)
+
+    # Log stored findings
+    logger.info("=== STORED RUN DEBUG ===")
+    logger.info("Run ID: %s", run.id)
+    logger.info("Stored findings count: %d", len(run.findings or []))
+    if run.findings:
+        stored_statuses = [f.get("status") for f in run.findings]
+        stored_status_counts = {}
+        for s in stored_statuses:
+            stored_status_counts[s] = stored_status_counts.get(s, 0) + 1
+        logger.info("Stored status counts: %s", stored_status_counts)
+        # Log first 5 stored findings
+        for i, f in enumerate(run.findings[:5]):
+            logger.info("  Stored[%d]: check_id=%s, status=%s", i, f.get("check_id", "N/A"), f.get("status", "N/A"))
+    logger.info("=== END STORED RUN DEBUG ===")
 
     if payload.findings:
         db.add_all(_finding_rows(run.id, payload.findings))
@@ -179,6 +215,22 @@ async def get_run(
     run = await db.get(Run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+
+    # Log findings for debugging
+    logger.info("=== GET RUN DEBUG ===")
+    logger.info("Run ID: %s", run.id)
+    logger.info("Run project: %s", run.project)
+    logger.info("Run findings count: %d", len(run.findings or []))
+    if run.findings:
+        statuses = [f.get("status") for f in run.findings]
+        status_counts = {}
+        for s in statuses:
+            status_counts[s] = status_counts.get(s, 0) + 1
+        logger.info("Run status counts: %s", status_counts)
+        for i, f in enumerate(run.findings[:3]):
+            logger.info("  Run.Finding[%d]: check_id=%s, status=%s", i, f.get("check_id", "N/A"), f.get("status", "N/A"))
+    logger.info("=== END GET RUN DEBUG ===")
+
     return Envelope(data=RunDetail.model_validate(run, from_attributes=True))
 
 
@@ -207,6 +259,10 @@ async def get_findings(
     if run_exists is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
+    logger.info("=== GET FINDINGS DEBUG ===")
+    logger.info("Run ID: %s", run_id)
+    logger.info("Filter - severity: %s, pillar: %s, status: %s", severity, pillar, status)
+
     stmt = select(RunFinding).where(RunFinding.run_id == run_id)
     if severity:
         stmt = stmt.where(func.lower(RunFinding.severity) == severity.lower())
@@ -216,4 +272,15 @@ async def get_findings(
         stmt = stmt.where(func.lower(RunFinding.status) == status.lower())
 
     result = await db.execute(stmt)
-    return Envelope(data=list(result.scalars().all()))
+    findings = list(result.scalars().all())
+    logger.info("Found %d findings", len(findings))
+    if findings:
+        statuses = [f.status for f in findings]
+        status_counts = {}
+        for s in statuses:
+            status_counts[s] = status_counts.get(s, 0) + 1
+        logger.info("Return status counts: %s", status_counts)
+        for i, f in enumerate(findings[:3]):
+            logger.info("  Return[%d]: check_id=%s, status=%s, resource=%s", i, f.check_id, f.status, f.resource)
+    logger.info("=== END GET FINDINGS DEBUG ===")
+    return Envelope(data=findings)

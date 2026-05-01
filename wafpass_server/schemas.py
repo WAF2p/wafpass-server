@@ -50,6 +50,7 @@ class FindingSchema(BaseModel):
     message: str
     remediation: str
     example: dict[str, Any] | None = None
+    regulatory_mapping: list[dict[str, Any]] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -73,6 +74,24 @@ class ControlMetaSchema(BaseModel):
     threat: list[str] = Field(default_factory=list)
     regulatory_mapping: list[dict[str, Any]] = Field(default_factory=list)
     checks: list[ControlCheckMetaSchema] = Field(default_factory=list)
+
+
+class ControlPackOut(BaseModel):
+    version: str
+    description: str
+    is_active: bool
+    control_count: int
+    imported_at: datetime
+    imported_by: uuid.UUID | None
+    activated_at: datetime | None
+    activated_by: uuid.UUID | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ControlPackSyncIn(BaseModel):
+    version: str = Field(description="Semantic version string, e.g. v1.2.0")
+    description: str = ""
 
 
 def _coerce_date(v: object) -> date | None:

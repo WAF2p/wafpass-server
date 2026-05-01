@@ -1,6 +1,7 @@
 """WAF++ PASS server entry point."""
 from __future__ import annotations
 
+import logging
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +10,7 @@ from fastapi.security import HTTPBearer
 from wafpass_server.config import settings
 from wafpass_server.routers.auth import router as auth_router
 from wafpass_server.routers.controls import router as controls_router
+from wafpass_server.routers.control_packs import router as control_packs_router
 from wafpass_server.routers.evidence import router as evidence_router
 from wafpass_server.routers.risks import router as risks_router
 from wafpass_server.routers.runs import router as runs_router
@@ -32,6 +34,7 @@ app = FastAPI(
         {"name": "auth", "description": "Login, token refresh, logout, user management."},
         {"name": "runs", "description": "Scan run results ingestion and retrieval."},
         {"name": "controls", "description": "WAF++ control catalogue management."},
+        {"name": "control-packs", "description": "Versioned control pack import, activation and rollback."},
         {"name": "waivers", "description": "Team-shared waiver records."},
         {"name": "risks", "description": "Team-shared risk acceptance records."},
         {"name": "sandbox", "description": "Run the real WAF++ engine against arbitrary HCL snippets."},
@@ -63,6 +66,7 @@ app.include_router(badges_router)
 app.include_router(leaderboard_router)
 app.include_router(runs_router)
 app.include_router(controls_router)
+app.include_router(control_packs_router)
 app.include_router(waivers_router)
 app.include_router(risks_router)
 app.include_router(evidence_router)
@@ -77,8 +81,17 @@ async def health() -> dict[str, str]:
 
 
 @app.on_event("startup")
-async def _seed_admin() -> None:
-    """Create the bootstrap admin user if no users exist and credentials are configured."""
+async def _configure_logging_and_seed_admin() -> None:
+    """Configure logging and create the bootstrap admin user if no users exist."""
+    # Configure logging to show DEBUG level messages
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler()],
+    )
+    logger = logging.getLogger("wafpass_server")
+    logger.info("=== WAF++ Server starting ===")
+
     if not settings.wafpass_admin_password:
         return  # seeding disabled
 
@@ -105,6 +118,8 @@ async def _seed_admin() -> None:
             f"[wafpass-server] Seeded admin user '{settings.wafpass_admin_username}' "
             f"with role '{settings.wafpass_admin_role}'."
         )
+
+    logger.info("=== WAF++ Server ready ===")
 
 
 def start() -> None:

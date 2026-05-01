@@ -199,6 +199,7 @@ async def trigger_scan(
                 message=chk.message or "",
                 remediation=chk.remediation or "",
                 example=chk.example,
+                regulatory_mapping=cr.control.regulatory_mapping,
             ))
         # Waived controls with no individual check results
         if cr.status == "WAIVED" and not cr.results:
@@ -212,6 +213,7 @@ async def trigger_scan(
                 resource="",
                 message=getattr(cr, "waived_reason", "") or "",
                 remediation="",
+                regulatory_mapping=cr.control.regulatory_mapping,
             ))
 
     # Compute pillar scores and overall score

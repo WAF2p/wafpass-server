@@ -57,9 +57,11 @@ Copy `.env.example` to `.env` for local development — it contains all variable
 | `WAFPASS_ENV` | `local` | Environment tag (`local`, `staging`, `production`) |
 | `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed CORS origins |
 | `WAFPASS_CONTROLS_DIR` | `controls` | Path to WAF++ control YAML files (used by Sandbox endpoint) |
-| `WAFPASS_JWT_SECRET` | `change-me-…` | **Change in production.** HS256 signing key for access tokens |
+| `WAFPASS_JWT_SECRET` | `change-me-…` | HS256 signing key for access tokens. **Required in non-local environments** — the server refuses to start with the default value when `WAFPASS_ENV != local`. Generate with `openssl rand -hex 32`. |
 | `WAFPASS_JWT_EXPIRE_MINUTES` | `60` | Access token lifetime in minutes |
 | `WAFPASS_JWT_REFRESH_DAYS` | `7` | Refresh token lifetime in days |
+| `WAFPASS_ENCRYPTION_KEY` | *(empty)* | At-rest encryption key for SSO secrets (OIDC client secret, SAML2 private key). Fernet-compatible 32-byte base64 key or any passphrase (PBKDF2-derived). **Required in non-local environments** — without it the server derives the key from `WAFPASS_JWT_SECRET`, which is insecure. Generate with `openssl rand -base64 32`. |
+| `WAFPASS_SECRETS_BACKEND` | `local` | Encryption backend for SSO secrets: `local` (Fernet AES), `aws_sm` (AWS Secrets Manager), `vault_transit` (HashiCorp Vault Transit) |
 | `WAFPASS_ADMIN_USERNAME` | `admin` | Username for the bootstrap admin user (seeded once on first startup) |
 | `WAFPASS_ADMIN_PASSWORD` | *(empty)* | Password for the bootstrap admin — **set this** to enable auto-seeding |
 | `WAFPASS_ADMIN_ROLE` | `engineer` | Role for the bootstrap admin (`clevel` \| `ciso` \| `architect` \| `engineer`) |
@@ -97,8 +99,12 @@ SSO is configured through the dashboard **SSO Settings** page (admin only) or di
 **OIDC flow:**
 1. Admin configures discovery URL, client ID/secret, redirect URI, and role mapping in SSO Settings.
 2. Users click "Sign in with OIDC" on the login page → redirect to IdP → callback → JWT issued.
-3. `GET /auth/oidc/authorize` initiates the Authorization Code flow.
-4. `GET /auth/oidc/callback` exchanges the code, provisions the user, issues a JWT, and redirects to the dashboard.
+3. `GET /auth/oidc/authorize` initiates the Authorization Code flow. A cryptographically random nonce is embedded in the signed state JWT and also sent to the IdP as the `nonce` parameter so the IdP includes it in the `id_token`.
+4. `GET /auth/oidc/callback` exchanges the code, then:
+   - Verifies the state JWT (CSRF protection).
+   - Fetches the IdP's public JWKS from `jwks_uri` and verifies the `id_token` signature (RS256/EC).
+   - Validates the `aud` claim equals `client_id` and the `nonce` claim matches the state JWT.
+   - Provisions the user and issues a WAF++ JWT, then redirects to the dashboard.
 
 **SAML2 flow:**
 1. Admin configures SP/IdP entity IDs, ACS URL, IdP certificate, and role mapping.

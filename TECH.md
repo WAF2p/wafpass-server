@@ -153,15 +153,19 @@ Browser
     │  GET /auth/oidc/authorize
     ▼
 routers/sso.py  ─── fetch discovery doc ──▶  IdP /.well-known/openid-configuration
-    │  302 redirect with signed JWT state + code_challenge
+    │  generate nonce=random_hex(16), state=HS256_JWT{nonce, exp}
+    │  302 redirect with state + nonce params
     ▼
-IdP authentication page
+IdP authentication page  (IdP binds nonce into id_token)
     │  302 redirect back  ?code=…&state=…
     ▼
 GET /auth/oidc/callback
-    ├─ verify JWT state (signed with WAFPASS_JWT_SECRET, 10 min TTL)
+    ├─ verify JWT state (signed with WAFPASS_JWT_SECRET, 10 min TTL) → extract nonce
     ├─ POST token_endpoint  →  id_token + access_token
-    ├─ decode id_token claims (unverified) or call userinfo_endpoint
+    ├─ fetch JWKS from discovery["jwks_uri"]
+    ├─ verify id_token signature (RS256/EC) using IdP public key
+    ├─ validate aud == client_id and nonce claim matches state nonce
+    │  (returns sso_error=token_verification_failed on any mismatch)
     ├─ provision/update User row (auth_provider="oidc")
     └─ issue WAF++ JWT + refresh token
     │  302 redirect  {frontend_url}?sso_ok=1&at=…&rt=…&u=BASE64_USER
@@ -214,7 +218,15 @@ ROLE_HIERARCHY = ["clevel", "ciso", "architect", "engineer", "admin"]
 
 SSO provider settings are stored in the `sso_configs` table (one row per provider: `oidc` or `saml2`). The `config` column is JSONB and holds all provider-specific fields (discovery URL, client credentials, certificate PEM, role mapping, etc.). This allows runtime reconfiguration without restarting the server.
 
-Sensitive values (client secrets, private keys) are stored as plain text in the database column — protect access to the database accordingly. Future hardening: encrypt these fields at rest with a KMS-backed key.
+Sensitive values (OIDC `client_secret`, SAML2 `sp_private_key`) are encrypted at rest before being written to the database by `secret_enc.py`. Three backends are supported:
+
+| Backend | `WAFPASS_SECRETS_BACKEND` | Key source |
+|---------|--------------------------|-----------|
+| Local Fernet (default) | `local` | `WAFPASS_ENCRYPTION_KEY` (32-byte base64 or passphrase → PBKDF2) |
+| AWS Secrets Manager | `aws_sm` | ARN stored in DB; secret value in AWS |
+| HashiCorp Vault Transit | `vault_transit` | Opaque ciphertext in DB; Vault holds the key |
+
+In non-local environments (`WAFPASS_ENV != local`) the server refuses to start unless `WAFPASS_ENCRYPTION_KEY` is explicitly set — falling back to derivation from `WAFPASS_JWT_SECRET` is blocked by a startup validator in `config.py`.
 
 ### Machine-to-machine (CI/CD)
 
@@ -490,6 +502,18 @@ class Settings(BaseSettings):
     wafpass_env: str = "local"
     cors_origins: str = "http://localhost:3000"
     wafpass_controls_dir: str = "controls"
+    wafpass_jwt_secret: str = _DEFAULT_JWT_SECRET
+    wafpass_encryption_key: str = ""
+
+    @model_validator(mode="after")
+    def _require_non_default_secrets_in_production(self) -> "Settings":
+        if self.wafpass_env == "local":
+            return self
+        if self.wafpass_jwt_secret == _DEFAULT_JWT_SECRET:
+            raise ValueError("WAFPASS_JWT_SECRET must be changed from the default value.")
+        if not self.wafpass_encryption_key:
+            raise ValueError("WAFPASS_ENCRYPTION_KEY must be set in non-local environments.")
+        return self
 
     @property
     def cors_origins_list(self) -> list[str]:
@@ -499,6 +523,8 @@ settings = Settings()  # Module-level singleton, read once at startup
 ```
 
 All environment variables are read once at process start. There is no hot-reload of configuration.
+
+**Startup enforcement:** When `WAFPASS_ENV` is anything other than `local`, the `model_validator` aborts startup (raises `ValidationError`) if `WAFPASS_JWT_SECRET` is still the shipped default or `WAFPASS_ENCRYPTION_KEY` is unset. Local development is unaffected.
 
 **`.env.example`** (in the `wafpass-server/` directory) documents all variables with their defaults and usage notes. Copy it to `.env` for local development:
 

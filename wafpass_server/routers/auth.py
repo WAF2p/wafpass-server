@@ -5,9 +5,9 @@ import hashlib
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -214,6 +214,25 @@ async def me(
 ) -> User:
     """Return the authenticated user's profile."""
     return user
+
+
+@router.get("/me/prefs")
+async def get_my_prefs(
+    user: Annotated[User, Depends(get_current_user)],
+) -> dict[str, Any]:
+    """Return the current user's stored UI preferences."""
+    return user.prefs or {}
+
+
+@router.put("/me/prefs", status_code=204)
+async def put_my_prefs(
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    payload: dict[str, Any] = Body(...),
+) -> None:
+    """Persist the current user's UI preferences (full replace)."""
+    await db.execute(update(User).where(User.id == user.id).values(prefs=payload))
+    await db.commit()
 
 
 # ── User management (requires engineer role) ─────────────────────────────────
