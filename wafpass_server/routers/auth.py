@@ -52,6 +52,7 @@ class UserOut(BaseModel):
     id: uuid.UUID
     username: str
     display_name: str
+    image_url: str = ""
     role: str
     auth_provider: str
     is_active: bool
@@ -83,11 +84,13 @@ class UserCreate(BaseModel):
     username: str
     password: str = Field(min_length=8)
     display_name: str = ""
+    image_url: str = ""
     role: str = "clevel"
 
 
 class UserUpdate(BaseModel):
     display_name: str | None = None
+    image_url: str | None = None
     role: str | None = None
     is_active: bool | None = None
     password: str | None = Field(default=None, min_length=8)
@@ -235,6 +238,36 @@ async def put_my_prefs(
     await db.commit()
 
 
+class ProfileUpdate(BaseModel):
+    display_name: str | None = None
+    image_url: str | None = None
+
+
+@router.put("/me/profile", response_model=UserOut)
+async def update_my_profile(
+    request: Request,
+    user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    payload: ProfileUpdate = Body(...),
+) -> User:
+    """Update the authenticated user's profile (display_name, image_url)."""
+    changed_fields: list[str] = []
+    if payload.display_name is not None:
+        user.display_name = payload.display_name
+        changed_fields.append("display_name")
+    if payload.image_url is not None:
+        user.image_url = payload.image_url
+        changed_fields.append("image_url")
+    if not changed_fields:
+        return user
+    await _audit(db, user.id, "user.update_profile", {
+        "fields": changed_fields,
+    }, ip=_ip(request))
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
 # ── User management (requires engineer role) ─────────────────────────────────
 
 @router.get("/users", response_model=list[UserOut])
@@ -263,6 +296,7 @@ async def create_user(
     user = User(
         username=payload.username,
         display_name=payload.display_name,
+        image_url=payload.image_url,
         role=payload.role,
         auth_provider="local",
         password_hash=hash_password(payload.password),
@@ -296,6 +330,9 @@ async def update_user(
     if payload.display_name is not None:
         user.display_name = payload.display_name
         changed_fields.append("display_name")
+    if payload.image_url is not None:
+        user.image_url = payload.image_url
+        changed_fields.append("image_url")
     if payload.role is not None:
         if payload.role not in ROLE_HIERARCHY:
             raise HTTPException(400, detail=f"Invalid role. Choose from: {', '.join(ROLE_HIERARCHY)}")

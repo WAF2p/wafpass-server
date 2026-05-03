@@ -5,8 +5,9 @@ import uuid
 from datetime import date, datetime, timezone
 
 from sqlalchemy import Boolean, Date, DateTime, Integer, Text
+from sqlalchemy.orm import foreign
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from wafpass_server.database import Base
 
@@ -28,8 +29,17 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     prefs: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    image_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+    # Relationships
+    finding_comments: Mapped[list["FindingComment"]] = relationship(
+        "FindingComment", back_populates="user", primaryjoin="User.id == foreign(FindingComment.user_id)"
+    )
+    secret_findings_comments: Mapped[list["SecretFindingComment"]] = relationship(
+        "SecretFindingComment", back_populates="user", primaryjoin="User.id == foreign(SecretFindingComment.user_id)"
+    )
 
 
 class UserAuditLog(Base):
@@ -280,6 +290,72 @@ class RunFinding(Base):
     regulatory_mapping: Mapped[list] = mapped_column(JSONB, default=list)
 
 
+class RunSecretFinding(Base):
+    """One row per secret finding — normalized out of runs.secret_findings for comments."""
+    __tablename__ = "run_secret_findings"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    file: Mapped[str] = mapped_column(Text, default="")
+    line_no: Mapped[int] = mapped_column(Integer, default=0)
+    pattern_name: Mapped[str] = mapped_column(Text, default="")
+    severity: Mapped[str] = mapped_column(Text, default="")
+    matched_key: Mapped[str] = mapped_column(Text, default="")
+    masked_value: Mapped[str] = mapped_column(Text, default="")
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
+
+    # Relationships
+    run: Mapped["Run"] = relationship(
+        "Run", back_populates="run_secret_findings", primaryjoin="foreign(RunSecretFinding.run_id) == Run.id"
+    )
+    comments: Mapped[list["SecretFindingComment"]] = relationship(
+        "SecretFindingComment", back_populates="secret_finding", primaryjoin="RunSecretFinding.id == foreign(SecretFindingComment.secret_finding_id)"
+    )
+
+
+class FindingComment(Base):
+    """Comment on a finding — enables team collaboration and audit trail."""
+    __tablename__ = "findings_comments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    finding_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    # Relationships - using explicit primaryjoin since FK is in this table
+    run: Mapped["Run"] = relationship(
+        "Run", back_populates="findings_comments", primaryjoin="foreign(FindingComment.run_id) == Run.id"
+    )
+    user: Mapped["User"] = relationship(
+        "User", back_populates="finding_comments", primaryjoin="foreign(FindingComment.user_id) == User.id"
+    )
+
+
+class SecretFindingComment(Base):
+    """Comment on a secret finding — enables team collaboration on hardcoded secrets."""
+    __tablename__ = "secret_findings_comments"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    secret_finding_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    run_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    # Relationships
+    run: Mapped["Run"] = relationship(
+        "Run", back_populates="secret_findings_comments", primaryjoin="foreign(SecretFindingComment.run_id) == Run.id"
+    )
+    user: Mapped["User"] = relationship(
+        "User", back_populates="secret_findings_comments", primaryjoin="foreign(SecretFindingComment.user_id) == User.id"
+    )
+    secret_finding: Mapped["RunSecretFinding"] = relationship(
+        "RunSecretFinding", back_populates="comments", primaryjoin="foreign(SecretFindingComment.secret_finding_id) == RunSecretFinding.id"
+    )
+
+
 class Run(Base):
     __tablename__ = "runs"
 
@@ -302,3 +378,14 @@ class Run(Base):
     secret_findings: Mapped[list] = mapped_column(JSONB, default=list)
     plan_changes: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    # Relationships
+    findings_comments: Mapped[list["FindingComment"]] = relationship(
+        "FindingComment", back_populates="run", primaryjoin="Run.id == foreign(FindingComment.run_id)"
+    )
+    secret_findings_comments: Mapped[list["SecretFindingComment"]] = relationship(
+        "SecretFindingComment", back_populates="run", primaryjoin="Run.id == foreign(SecretFindingComment.run_id)"
+    )
+    run_secret_findings: Mapped[list["RunSecretFinding"]] = relationship(
+        "RunSecretFinding", back_populates="run", primaryjoin="Run.id == foreign(RunSecretFinding.run_id)"
+    )

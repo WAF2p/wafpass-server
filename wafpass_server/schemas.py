@@ -5,7 +5,7 @@ import uuid
 from datetime import date, datetime
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 # Re-export control schema types from wafpass-core so callers only need one import.
 from wafpass.control_schema import WizardCheck, WizardControl  # noqa: F401
@@ -37,9 +37,11 @@ class SecretFindingSchema(BaseModel):
     matched_key: str
     masked_value: str
     suppressed: bool = False
+    comment_count: int = Field(default=0, ge=0)
 
 
 class FindingSchema(BaseModel):
+    id: uuid.UUID | None = None  # Optional on ingestion; set by server on save
     check_id: str
     check_title: str
     control_id: str
@@ -51,6 +53,7 @@ class FindingSchema(BaseModel):
     remediation: str
     example: dict[str, Any] | None = None
     regulatory_mapping: list[dict[str, Any]] = Field(default_factory=list)
+    comment_count: int = Field(default=0, ge=0)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -294,6 +297,52 @@ class ComplianceAuditEventOut(BaseModel):
     after: Any | None
     timestamp: datetime
     created_by: uuid.UUID | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Finding comment schemas ───────────────────────────────────────────────────
+
+
+class FindingCommentIn(BaseModel):
+    """Request body for creating a comment on a finding."""
+    message: str = Field(min_length=1, max_length=10000)
+
+
+class FindingCommentOut(BaseModel):
+    """Response schema for finding comments."""
+    id: uuid.UUID
+    finding_id: uuid.UUID
+    run_id: uuid.UUID
+    user_id: uuid.UUID
+    message: str
+    created_at: datetime
+    username: str = ""
+    display_name: str = ""
+    image_url: str = ""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Secret finding comment schemas ────────────────────────────────────────────
+
+
+class SecretFindingCommentIn(BaseModel):
+    """Request body for creating a comment on a secret finding."""
+    message: str = Field(min_length=1, max_length=10000)
+
+
+class SecretFindingCommentOut(BaseModel):
+    """Response schema for secret finding comments."""
+    id: uuid.UUID
+    secret_finding_id: uuid.UUID
+    run_id: uuid.UUID
+    user_id: uuid.UUID
+    message: str
+    created_at: datetime
+    username: str = ""
+    display_name: str = ""
+    image_url: str = ""
 
     model_config = ConfigDict(from_attributes=True)
 
