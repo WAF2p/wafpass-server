@@ -35,7 +35,9 @@ wafpass-server/
 │       ├── achievements.py  # Maturity tier milestones + public verification page
 │       ├── leaderboard.py   # Hall of Fame — top sovereign + most improved rankings
 │       ├── badges.py        # Live SVG badges and shields.io-compatible JSON endpoint
-│       └── projects.py      # Project Passport CRUD
+│       ├── projects.py      # Project Passport CRUD
+│       ├── findings_comments.py       # Team collaboration on regular findings
+│       └── secret_findings_comments.py # Team collaboration on secret findings
 ├── alembic/
 │   ├── env.py           # Alembic environment (async-compatible)
 │   └── versions/
@@ -56,7 +58,9 @@ wafpass-server/
 │       ├── 0015_add_evidence.py
 │       ├── 0016_add_project_passports.py
 │       ├── 0017_add_passport_image_url.py
-│       └── 0018_add_achievements.py
+│       ├── 0018_add_achievements.py
+│       ├── 0019_add_findings_comments.py
+│       └── 0020_add_secret_findings_comments.py
 ├── alembic.ini
 ├── entrypoint.sh        # Runs migrations then starts uvicorn
 ├── Dockerfile

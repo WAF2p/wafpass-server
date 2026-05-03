@@ -369,6 +369,16 @@ Per-project metadata — display name, owner, team, contact, description, critic
 | `PUT` | `/projects/{project}/passport` | architect | Upsert a project passport |
 | `DELETE` | `/projects/{project}/passport` | admin | Delete a project passport |
 
+### Findings Comments
+
+Team collaboration on findings — comments, notifications, and remediation tracking. Comments can be added to regular findings or secret findings.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/findings-comments` | clevel | List comments for a run (`finding_id` or `secret_finding_id` filter) |
+| `POST` | `/findings-comments` | clevel | Create a comment on a finding |
+| `GET` | `/findings-comments/count` | clevel | Comment count per finding (aggregated) |
+
 ---
 
 ## Database migrations
@@ -404,6 +414,8 @@ alembic current                                # show applied revision
 | `0016_add_project_passports` | project_passports table (per-project metadata) |
 | `0017_add_passport_image_url` | image_url column on project_passports |
 | `0018_add_achievements` | project_achievements table (maturity tier milestones with verification tokens) |
+| `0019_add_findings_comments` | findings_comments table (team collaboration on findings) |
+| `0020_add_secret_findings_comments` | secret_findings_comments table (comments on secret findings) |
 
 ---
 
