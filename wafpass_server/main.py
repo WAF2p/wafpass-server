@@ -25,6 +25,7 @@ from wafpass_server.routers.compliance_audit import router as compliance_audit_r
 from wafpass_server.routers.waivers import router as waivers_router
 from wafpass_server.routers.findings_comments import router as findings_comments_router
 from wafpass_server.routers.secret_findings_comments import router as secret_findings_comments_router
+from wafpass_server.routers.widgets import router as widgets_router
 
 app = FastAPI(
     title="wafpass-server",
@@ -49,6 +50,7 @@ app = FastAPI(
         {"name": "leaderboard", "description": "Hall of Fame — top sovereign and most improved projects."},
         {"name": "audit", "description": "Server-side compliance audit log — waiver, risk, scan, and finding events."},
         {"name": "findings-comments", "description": "Team collaboration on findings — comments, notifications, and remediation tracking."},
+        {"name": "widgets", "description": "Widget management — create dashboards for compliance data display on computers, TVs, or web pages."},
     ],
 )
 
@@ -78,6 +80,7 @@ app.include_router(findings_comments_router)
 app.include_router(secret_findings_comments_router)
 app.include_router(sandbox_router)
 app.include_router(scan_router)
+app.include_router(widgets_router)
 
 
 @app.get("/health", tags=["health"])

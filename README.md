@@ -379,6 +379,68 @@ Team collaboration on findings — comments, notifications, and remediation trac
 | `POST` | `/findings-comments` | clevel | Create a comment on a finding |
 | `GET` | `/findings-comments/count` | clevel | Comment count per finding (aggregated) |
 
+### Widgets
+
+Create and manage dashboards for compliance data display on computers, TVs, or web pages. Widgets have unique authentication tokens and can be configured to show specific projects, data types, and refresh intervals.
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/widgets` | engineer | Create a new widget |
+| `GET` | `/widgets` | engineer | List all widgets (`is_active` filter) |
+| `GET` | `/widgets/{id}` | engineer | Get widget details |
+| `PUT` | `/widgets/{id}` | engineer | Update a widget |
+| `DELETE` | `/widgets/{id}` | admin | Delete a widget |
+| `GET` | `/widget/p/{token}.json` | None | Public JSON data endpoint |
+| `GET` | `/widget/p/{token}/badge.svg` | None | Public SVG badge endpoint |
+
+**Create a widget:**
+
+```bash
+curl -X POST http://localhost:8000/widgets \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Main Office Display",
+    "config": {
+      "widget_type": "compliance-tile",
+      "projects": ["my-app", "api-service"],
+      "refresh_interval": 300,
+      "show_score": true,
+      "show_pillars": true,
+      "theme": "auto",
+      "layout": "horizontal"
+    }
+  }'
+```
+
+**Fetch widget data (public endpoint, no auth required):**
+
+```bash
+curl http://localhost:8000/widget/p/abc123xyz.json
+```
+
+Response:
+```json
+{
+  "token": "abc123xyz",
+  "name": "Main Office Display",
+  "data": {
+    "score": 85,
+    "tier_level": 4,
+    "tier_label": "Optimized",
+    "tier_color": "#7c3aed",
+    "projects": [...],
+    "pillar_scores": {...},
+    "last_run_at": "2026-01-15T10:30:00Z"
+  }
+}
+```
+
+Embed the badge in your README or dashboard:
+```markdown
+![WAF++ PASS](https://your-server.com/widget/p/abc123xyz.svg)
+```
+
 ---
 
 ## Database migrations

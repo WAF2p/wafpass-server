@@ -13,8 +13,8 @@ wafpass-server/
 │   ├── config.py        # Settings via pydantic-settings (env var parsing)
 │   ├── database.py      # SQLAlchemy async engine + session factory
 │   ├── models.py        # ORM models: User, RefreshToken, SsoConfig, Run, Control, Waiver, RiskAcceptance,
-│   │                    #             ApiKey, Evidence, ProjectPassport, ProjectAchievement, …
-│   ├── schemas.py       # Pydantic response/input schemas (AchievementOut, ProjectPassportOut, …)
+│   │                    #             ApiKey, Evidence, ProjectPassport, ProjectAchievement, Widget, …
+│   ├── schemas.py       # Pydantic response/input schemas (AchievementOut, ProjectPassportOut, WidgetOut, …)
 │   ├── auth/
 │   │   ├── __init__.py
 │   │   ├── jwt_utils.py          # create_access_token, decode_access_token (HS256)
@@ -37,7 +37,8 @@ wafpass-server/
 │       ├── badges.py        # Live SVG badges and shields.io-compatible JSON endpoint
 │       ├── projects.py      # Project Passport CRUD
 │       ├── findings_comments.py       # Team collaboration on regular findings
-│       └── secret_findings_comments.py # Team collaboration on secret findings
+│       ├── secret_findings_comments.py # Team collaboration on secret findings
+│       └── widgets.py       # Widget management — dashboards for compliance data display
 ├── alembic/
 │   ├── env.py           # Alembic environment (async-compatible)
 │   └── versions/
@@ -424,6 +425,51 @@ project_achievements
 ```
 
 **Achievement evaluation flow:** `POST /runs` calls `evaluate_and_record_achievements(db, run)` after persisting the run. The function checks which tier thresholds the run's score qualifies for and creates `ProjectAchievement` rows only for tiers the project has not previously held.
+
+### Widget
+
+Widget configuration for dashboards and external displays. Each widget has a unique token for authentication and can be configured to show specific projects, data types, and refresh intervals. The widget table stores the display configuration (type, projects, theme) and tracks last access time.
+
+```
+widgets
+├── id                UUID   PK
+├── name              TEXT   NOT NULL
+├── token             TEXT   UNIQUE NOT NULL (32-char URL-safe random token)
+├── config            JSONB  widget configuration (type, projects, refresh_interval, theme, layout)
+├── is_active         BOOL   (true = enabled, false = disabled)
+├── last_accessed_at  TIMESTAMPTZ  NULL (last public access timestamp)
+├── created_by        UUID   FK → users.id  NULL
+├── created_at        TIMESTAMPTZ  server_default=now()
+└── updated_at        TIMESTAMPTZ  server_default=now() on update
+```
+
+**Widget token flow:**
+```
+Admin/Engineer
+    │  POST /widgets {name, config}
+    ▼
+Server generates 32-char URL-safe token
+    ▼
+Widget created with token → response includes token
+    │
+    ▼
+Dashboard/Display
+    │  GET /widget/p/{token}.json
+    ▼
+Token verified, last_accessed_at updated
+    ▼
+JSON data returned (score, pillar_scores, projects)
+```
+
+**Widget configuration (config JSONB):**
+- `widget_type`: "compliance-tile" (default), "score-card", "pillar-chart"
+- `projects`: list of project names to display (empty = all projects)
+- `refresh_interval`: seconds between automatic refresh (60–3600, default 300)
+- `show_score`: display overall score (default true)
+- `show_pillars`: display pillar breakdown (default true)
+- `show_trend`: show trend indicator (default false)
+- `theme`: "auto", "light", "dark" (default "auto")
+- `layout`: "horizontal", "vertical", "grid" (default "horizontal")
 
 ---
 

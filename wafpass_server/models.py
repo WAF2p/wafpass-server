@@ -356,6 +356,27 @@ class SecretFindingComment(Base):
     )
 
 
+class Widget(Base):
+    """Widget configuration for dashboards and external displays.
+
+    Widgets display real-time compliance data on computers, TVs, web pages, etc.
+    Each widget has a unique token for authentication and can be configured to
+    show specific projects, data types, and refresh intervals.
+    """
+    __tablename__ = "widgets"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)  # 32-char URL-safe token
+    # Widget configuration stored as JSONB
+    config: Mapped[dict] = mapped_column(JSONB, default=dict)  # type, projects, refresh_interval, etc.
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class Run(Base):
     __tablename__ = "runs"
 

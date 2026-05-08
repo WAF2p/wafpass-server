@@ -347,6 +347,46 @@ class SecretFindingCommentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# ── Widget schemas ────────────────────────────────────────────────────────────
+
+
+class WidgetConfig(BaseModel):
+    """Widget display configuration."""
+
+    widget_type: str = Field(default="compliance-tile", description="Type of widget to display")
+    title: str = Field(default="WAF++ PASS")
+    projects: list[str] = Field(default_factory=list, description="Projects to show (empty = all)")
+    refresh_interval: int = Field(default=300, ge=60, le=3600, description="Refresh interval in seconds")
+    show_score: bool = Field(default=True, description="Show overall score")
+    show_pillars: bool = Field(default=True, description="Show pillar scores")
+    show_trend: bool = Field(default=False, description="Show trend indicator")
+    theme: str = Field(default="auto", description="Theme: auto, light, dark")
+    layout: str = Field(default="horizontal", description="Layout: horizontal, vertical, grid")
+    is_active: bool = Field(default=True, description="Is the widget active")
+
+
+class WidgetCreate(BaseModel):
+    """Request body for creating a widget."""
+
+    name: str = Field(min_length=1, max_length=100)
+    config: WidgetConfig = Field(default_factory=WidgetConfig)
+
+
+class WidgetOut(BaseModel):
+    """Response schema for widgets."""
+
+    id: uuid.UUID
+    name: str
+    token: str
+    config: dict[str, Any]
+    is_active: bool
+    last_accessed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ── Control schemas ───────────────────────────────────────────────────────────
 
 
