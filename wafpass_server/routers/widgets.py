@@ -24,7 +24,7 @@ from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.auth.deps import require_role
@@ -119,11 +119,17 @@ def _make_svg(value_text: str, color: str, label: str = "WAF++ PASS") -> str:
 async def widget_public_data(
     token: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    projects: Annotated[list[str] | None, Query(description="Limit results to these project names")] = None,
 ) -> JSONResponse:
     """Return JSON data for a public widget. No authentication required.
 
     Use this endpoint to power dashboards on computers, TVs, or web pages.
     The widget token authenticates access to the data.
+
+    By default all projects are returned (latest run per project). Pass one or
+    more ``?projects=name`` query parameters to restrict the result.  The
+    widget's own config ``projects`` list is used as a fallback filter when no
+    query parameter is provided.
 
     Returns:
         {
@@ -152,64 +158,40 @@ async def widget_public_data(
     widget.last_accessed_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
     await db.commit()
 
-    # If projects are specified in config, filter by them; otherwise get all projects
-    projects = widget.config.get("projects", []) if widget.config else []
+    project_filter: list[str] = projects or []
+
+    # Single query: latest run per project (optionally filtered)
+    latest_sq = select(
+        Run.project.label("project"),
+        func.max(Run.created_at).label("max_created_at"),
+    ).group_by(Run.project)
+    if project_filter:
+        latest_sq = latest_sq.where(Run.project.in_(project_filter))
+    latest_sq = latest_sq.subquery()
+
+    runs_result = await db.execute(
+        select(Run.project, Run.score, Run.pillar_scores, Run.created_at)
+        .join(latest_sq, (Run.project == latest_sq.c.project) & (Run.created_at == latest_sq.c.max_created_at))
+        .order_by(Run.project)
+    )
+    runs = runs_result.all()
+
     score = 0
-    pillar_scores = {}
+    pillar_scores: dict = {}
     last_run_at = None
     project_data = []
 
-    # Get latest runs for the widget's projects
-    if projects:
-        for project in projects:
-            run_result = await db.execute(
-                select(
-                    Run.id.label("run_id"),
-                    Run.project.label("project"),
-                    Run.score.label("score"),
-                    Run.pillar_scores.label("pillar_scores"),
-                    Run.created_at.label("created_at"),
-                )
-                .where(Run.project == project)
-                .order_by(Run.created_at.desc())
-                .limit(1)
-            )
-            run = run_result.first()
-            if run:
-                project_data.append({
-                    "project": run.project,
-                    "score": run.score,
-                    "pillar_scores": run.pillar_scores,
-                    "last_run_at": run.created_at.isoformat() if run.created_at else None,
-                })
-                if run.score > score:
-                    score = run.score
-                    pillar_scores = run.pillar_scores
-                    last_run_at = run.created_at
-    else:
-        # No projects specified - get latest run across all projects
-        run_result = await db.execute(
-            select(
-                Run.id.label("run_id"),
-                Run.project.label("project"),
-                Run.score.label("score"),
-                Run.pillar_scores.label("pillar_scores"),
-                Run.created_at.label("created_at"),
-            )
-            .order_by(Run.created_at.desc())
-            .limit(1)
-        )
-        run = run_result.first()
-        if run:
+    for run in runs:
+        project_data.append({
+            "project": run.project,
+            "score": run.score,
+            "pillar_scores": run.pillar_scores,
+            "last_run_at": run.created_at.isoformat() if run.created_at else None,
+        })
+        if run.score > score:
             score = run.score
             pillar_scores = run.pillar_scores
             last_run_at = run.created_at
-            project_data.append({
-                "project": run.project,
-                "score": run.score,
-                "pillar_scores": run.pillar_scores,
-                "last_run_at": run.created_at.isoformat() if run.created_at else None,
-            })
 
     level, label, color = _tier_for_score(score)
 
@@ -235,13 +217,14 @@ async def widget_public_data(
 async def widget_public_badge(
     token: str,
     db: Annotated[AsyncSession, Depends(get_db)],
+    projects: Annotated[list[str] | None, Query(description="Limit results to these project names")] = None,
 ) -> Response:
     """Return an SVG badge for a public widget. No authentication required.
 
     Use this in READMEs or dashboards:
         ![WAF++ PASS](https://your-server.com/widget/p/abc123.svg)
 
-    The badge reflects the latest run score for the widget's configured projects.
+    The badge reflects the best score across all projects (or the filtered set).
     """
     result = await db.execute(select(Widget).where(Widget.token == token))
     widget: Widget | None = result.scalar_one_or_none()
@@ -252,26 +235,22 @@ async def widget_public_badge(
     if not widget.is_active:
         raise HTTPException(status_code=403, detail="Widget is disabled")
 
-    # Get latest run for badge display
-    projects = widget.config.get("projects", []) if widget.config else []
-    score = 0
+    project_filter: list[str] = projects or []
 
-    if projects:
-        # Get highest score across configured projects
-        for project in projects:
-            run_result = await db.execute(
-                select(Run.score).where(Run.project == project).order_by(Run.created_at.desc()).limit(1)
-            )
-            row = run_result.scalar_one_or_none()
-            if row is not None and row > score:
-                score = row
-    else:
-        # Get latest run across all projects
-        run_result = await db.execute(
-            select(Run.score).order_by(Run.created_at.desc()).limit(1)
-        )
-        row = run_result.scalar_one_or_none()
-        score = row or 0
+    latest_sq = select(
+        Run.project.label("project"),
+        func.max(Run.created_at).label("max_created_at"),
+    ).group_by(Run.project)
+    if project_filter:
+        latest_sq = latest_sq.where(Run.project.in_(project_filter))
+    latest_sq = latest_sq.subquery()
+
+    scores_result = await db.execute(
+        select(Run.score)
+        .join(latest_sq, (Run.project == latest_sq.c.project) & (Run.created_at == latest_sq.c.max_created_at))
+    )
+    rows = scores_result.scalars().all()
+    score = max(rows) if rows else 0
 
     level, label, color = _tier_for_score(score)
     value_text = f"L{level} · {label}" if level > 0 else "No Data"
@@ -419,60 +398,39 @@ async def get_widget_data(
     if widget is None:
         raise HTTPException(status_code=404, detail="Widget not found")
 
-    # Get latest runs for the widget's projects
-    projects = widget.config.get("projects", []) if isinstance(widget.config, dict) else []
+    project_filter: list[str] = widget.config.get("projects", []) if isinstance(widget.config, dict) else []
+
+    latest_sq = select(
+        Run.project.label("project"),
+        func.max(Run.created_at).label("max_created_at"),
+    ).group_by(Run.project)
+    if project_filter:
+        latest_sq = latest_sq.where(Run.project.in_(project_filter))
+    latest_sq = latest_sq.subquery()
+
+    runs_result = await db.execute(
+        select(Run.project, Run.score, Run.pillar_scores, Run.created_at)
+        .join(latest_sq, (Run.project == latest_sq.c.project) & (Run.created_at == latest_sq.c.max_created_at))
+        .order_by(Run.project)
+    )
+    runs = runs_result.all()
+
     score = 0
-    pillar_scores = {}
+    pillar_scores: dict = {}
     last_run_at = None
     project_data = []
 
-    if projects:
-        for project in projects:
-            run_result = await db.execute(
-                select(
-                    Run.project.label("project"),
-                    Run.score.label("score"),
-                    Run.pillar_scores.label("pillar_scores"),
-                    Run.created_at.label("created_at"),
-                )
-                .where(Run.project == project)
-                .order_by(Run.created_at.desc())
-                .limit(1)
-            )
-            run = run_result.first()
-            if run:
-                project_data.append({
-                    "project": run.project,
-                    "score": run.score,
-                    "pillar_scores": run.pillar_scores,
-                    "last_run_at": run.created_at.isoformat() if run.created_at else None,
-                })
-                if run.score > score:
-                    score = run.score
-                    pillar_scores = run.pillar_scores
-                    last_run_at = run.created_at
-    else:
-        run_result = await db.execute(
-            select(
-                Run.project.label("project"),
-                Run.score.label("score"),
-                Run.pillar_scores.label("pillar_scores"),
-                Run.created_at.label("created_at"),
-            )
-            .order_by(Run.created_at.desc())
-            .limit(1)
-        )
-        run = run_result.first()
-        if run:
+    for run in runs:
+        project_data.append({
+            "project": run.project,
+            "score": run.score,
+            "pillar_scores": run.pillar_scores,
+            "last_run_at": run.created_at.isoformat() if run.created_at else None,
+        })
+        if run.score > score:
             score = run.score
             pillar_scores = run.pillar_scores
             last_run_at = run.created_at
-            project_data.append({
-                "project": run.project,
-                "score": run.score,
-                "pillar_scores": run.pillar_scores,
-                "last_run_at": run.created_at.isoformat() if run.created_at else None,
-            })
 
     level, label, color = _tier_for_score(score)
 
