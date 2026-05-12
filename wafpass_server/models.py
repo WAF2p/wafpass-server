@@ -227,7 +227,7 @@ class ProjectPassport(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     criticality: Mapped[str] = mapped_column(Text, default="")      # critical|high|medium|low
     environment: Mapped[str] = mapped_column(Text, default="")       # production|staging|development|mixed
-    cloud_provider: Mapped[str] = mapped_column(Text, default="")    # aws|azure|gcp|multi|other
+    cloud_provider: Mapped[str] = mapped_column(Text, default="")    # aws|azure|gcp|alicloud|yandex|oci|ovh|hetzner|stackit|multi|other
     repository_url: Mapped[str] = mapped_column(Text, default="")
     documentation_url: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[list] = mapped_column(JSONB, default=list)
