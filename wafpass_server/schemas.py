@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 # Re-export control schema types from wafpass-core so callers only need one import.
 from wafpass.control_schema import WizardCheck, WizardControl  # noqa: F401
@@ -19,10 +19,11 @@ class Meta(BaseModel):
     total: int | None = None
     page: int | None = None
     per_page: int | None = None
+    next_cursor: str | None = None
 
 
 class Envelope(BaseModel, Generic[T]):
-    """Consistent API response wrapper used by all /controls endpoints."""
+    """Consistent API response wrapper used by all endpoints."""
 
     data: T
     meta: Meta = Field(default_factory=Meta)
@@ -36,9 +37,11 @@ class SecretFindingSchema(BaseModel):
     matched_key: str
     masked_value: str
     suppressed: bool = False
+    comment_count: int = Field(default=0, ge=0)
 
 
 class FindingSchema(BaseModel):
+    id: uuid.UUID | None = None  # Optional on ingestion; set by server on save
     check_id: str
     check_title: str
     control_id: str
@@ -49,6 +52,10 @@ class FindingSchema(BaseModel):
     message: str
     remediation: str
     example: dict[str, Any] | None = None
+    regulatory_mapping: list[dict[str, Any]] = Field(default_factory=list)
+    comment_count: int = Field(default=0, ge=0)
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ControlCheckMetaSchema(BaseModel):
@@ -72,18 +79,55 @@ class ControlMetaSchema(BaseModel):
     checks: list[ControlCheckMetaSchema] = Field(default_factory=list)
 
 
+class ControlPackOut(BaseModel):
+    version: str
+    description: str
+    is_active: bool
+    control_count: int
+    imported_at: datetime
+    imported_by: uuid.UUID | None
+    activated_at: datetime | None
+    activated_by: uuid.UUID | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ControlPackSyncIn(BaseModel):
+    version: str = Field(description="Semantic version string, e.g. v1.2.0")
+    description: str = ""
+
+
+def _coerce_date(v: object) -> date | None:
+    """Accept a date object, ISO date string, or empty string; reject anything else."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, date):
+        return v
+    if isinstance(v, str):
+        try:
+            return date.fromisoformat(v)
+        except ValueError as exc:
+            raise ValueError(f"Invalid date format '{v}' — expected YYYY-MM-DD") from exc
+    raise TypeError(f"Expected date string or None, got {type(v).__name__}")
+
+
 class WaiverUpsert(BaseModel):
     reason: str = ""
     owner: str = ""
-    expires: str = ""
+    expires: date | None = None
     project: str = ""
+
+    @field_validator("expires", mode="before")
+    @classmethod
+    def _parse_expires(cls, v: object) -> date | None:
+        return _coerce_date(v)
 
 
 class WaiverOut(BaseModel):
     id: str
     reason: str
     owner: str
-    expires: str
+    expires: date | None
     project: str
     created_at: datetime
     updated_at: datetime
@@ -101,9 +145,14 @@ class RiskAcceptanceUpsert(BaseModel):
     notes: str = ""
     risk_level: str = "accepted"
     residual_risk: str = "medium"
-    expires: str = ""
-    accepted_at: str = ""
+    expires: date | None = None
+    accepted_at: date | None = None
     project: str = ""
+
+    @field_validator("expires", "accepted_at", mode="before")
+    @classmethod
+    def _parse_dates(cls, v: object) -> date | None:
+        return _coerce_date(v)
 
 
 class RiskAcceptanceOut(BaseModel):
@@ -117,9 +166,34 @@ class RiskAcceptanceOut(BaseModel):
     notes: str
     risk_level: str
     residual_risk: str
-    expires: str
-    accepted_at: str
+    expires: date | None
+    accepted_at: date | None
     project: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectPassportUpsert(BaseModel):
+    display_name: str = ""
+    owner: str = ""
+    owner_team: str = ""
+    contact_email: str = ""
+    description: str = ""
+    criticality: str = ""
+    environment: str = ""
+    cloud_provider: str = ""  # aws|azure|gcp|alicloud|yandex|oci|ovh|hetzner|stackit|multi|other
+    repository_url: str = ""
+    documentation_url: str = ""
+    tags: list[str] = Field(default_factory=list)
+    notes: str = ""
+    image_url: str = ""
+
+
+class ProjectPassportOut(ProjectPassportUpsert):
+    project: str
+    updated_by: str
     created_at: datetime
     updated_at: datetime
 
@@ -134,6 +208,7 @@ class RunCreate(BaseModel):
     git_sha: str = ""
     triggered_by: str = "local"
     iac_framework: str = "terraform"
+    stage: str = ""
     score: int = Field(default=0, ge=0, le=100)
     pillar_scores: dict[str, int] = Field(default_factory=dict)
     path: str = ""
@@ -154,6 +229,7 @@ class RunSummary(BaseModel):
     git_sha: str
     triggered_by: str
     iac_framework: str
+    stage: str
     score: int
     pillar_scores: dict[str, int]
     path: str
@@ -173,6 +249,142 @@ class RunDetail(RunSummary):
     plan_changes: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}
+
+
+# ── Achievement schemas ───────────────────────────────────────────────────────
+
+
+class AchievementOut(BaseModel):
+    id: uuid.UUID
+    project: str
+    tier_level: int
+    tier_label: str
+    score: int
+    run_id: uuid.UUID
+    verification_token: str
+    snapshot_jsonb: dict[str, Any]
+    achieved_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Compliance audit event schemas ───────────────────────────────────────────
+
+
+class ComplianceAuditEventIn(BaseModel):
+    client_id: str = ""
+    actor: str = ""
+    category: str          # waiver|risk|scan|finding
+    action: str
+    subject_id: str = ""
+    subject_type: str = ""
+    summary: str = ""
+    timestamp: str = ""    # ISO 8601 — dashboard-provided event time; falls back to server now()
+    before: Any | None = None
+    after: Any | None = None
+
+
+class ComplianceAuditEventOut(BaseModel):
+    id: uuid.UUID
+    client_id: str
+    actor: str
+    category: str
+    action: str
+    subject_id: str
+    subject_type: str
+    summary: str
+    before: Any | None
+    after: Any | None
+    timestamp: datetime
+    created_by: uuid.UUID | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Finding comment schemas ───────────────────────────────────────────────────
+
+
+class FindingCommentIn(BaseModel):
+    """Request body for creating a comment on a finding."""
+    message: str = Field(min_length=1, max_length=10000)
+
+
+class FindingCommentOut(BaseModel):
+    """Response schema for finding comments."""
+    id: uuid.UUID
+    finding_id: uuid.UUID
+    run_id: uuid.UUID
+    user_id: uuid.UUID
+    message: str
+    created_at: datetime
+    username: str = ""
+    display_name: str = ""
+    image_url: str = ""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Secret finding comment schemas ────────────────────────────────────────────
+
+
+class SecretFindingCommentIn(BaseModel):
+    """Request body for creating a comment on a secret finding."""
+    message: str = Field(min_length=1, max_length=10000)
+
+
+class SecretFindingCommentOut(BaseModel):
+    """Response schema for secret finding comments."""
+    id: uuid.UUID
+    secret_finding_id: uuid.UUID
+    run_id: uuid.UUID
+    user_id: uuid.UUID
+    message: str
+    created_at: datetime
+    username: str = ""
+    display_name: str = ""
+    image_url: str = ""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Widget schemas ────────────────────────────────────────────────────────────
+
+
+class WidgetConfig(BaseModel):
+    """Widget display configuration."""
+
+    widget_type: str = Field(default="compliance-tile", description="Type of widget to display")
+    title: str = Field(default="WAF++ PASS")
+    projects: list[str] = Field(default_factory=list, description="Projects to show (empty = all)")
+    refresh_interval: int = Field(default=300, ge=60, le=3600, description="Refresh interval in seconds")
+    show_score: bool = Field(default=True, description="Show overall score")
+    show_pillars: bool = Field(default=True, description="Show pillar scores")
+    show_trend: bool = Field(default=False, description="Show trend indicator")
+    theme: str = Field(default="auto", description="Theme: auto, light, dark")
+    layout: str = Field(default="horizontal", description="Layout: horizontal, vertical, grid")
+    is_active: bool = Field(default=True, description="Is the widget active")
+
+
+class WidgetCreate(BaseModel):
+    """Request body for creating a widget."""
+
+    name: str = Field(min_length=1, max_length=100)
+    config: WidgetConfig = Field(default_factory=WidgetConfig)
+
+
+class WidgetOut(BaseModel):
+    """Response schema for widgets."""
+
+    id: uuid.UUID
+    name: str
+    token: str
+    config: dict[str, Any]
+    is_active: bool
+    last_accessed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ── Control schemas ───────────────────────────────────────────────────────────

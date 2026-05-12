@@ -4,10 +4,15 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
+
 from pydantic import BaseModel
 
+from wafpass_server.auth.deps import require_role
 from wafpass_server.config import settings
+from wafpass_server.models import User
 
 router = APIRouter(prefix="/sandbox", tags=["sandbox"])
 
@@ -64,7 +69,10 @@ class SandboxResponse(BaseModel):
 
 
 @router.post("", response_model=SandboxResponse)
-async def run_sandbox(payload: SandboxRequest) -> SandboxResponse:
+async def run_sandbox(
+    payload: SandboxRequest,
+    _: Annotated[User, Depends(require_role("architect"))],
+) -> SandboxResponse:
     if not _check_wafpass():
         raise HTTPException(
             status_code=503,
@@ -195,7 +203,9 @@ async def run_sandbox(payload: SandboxRequest) -> SandboxResponse:
 
 
 @router.get("/status")
-async def sandbox_status() -> dict:
+async def sandbox_status(
+    _: Annotated[User, Depends(require_role("clevel"))],
+) -> dict:
     """Check whether the real engine is available."""
     available = _check_wafpass()
     controls_dir = Path(settings.wafpass_controls_dir)

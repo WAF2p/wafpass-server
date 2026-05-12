@@ -1,0 +1,32 @@
+"""add regulatory_mapping column to run_findings table
+
+Revision ID: 0027
+Revises: 0026
+Create Date: 2026-04-30 00:00:00.000000
+"""
+from __future__ import annotations
+
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects import postgresql
+
+revision = "0027"
+down_revision = "0026"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column(
+        "run_findings",
+        sa.Column(
+            "regulatory_mapping",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default=sa.text("'[]'::jsonb"),
+        ),
+    )
+
+
+def downgrade() -> None:
+    op.drop_column("run_findings", "regulatory_mapping")
