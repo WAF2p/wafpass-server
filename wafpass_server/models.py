@@ -377,6 +377,20 @@ class Widget(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class Notification(Base):
+    """System notifications - visible to users based on their role."""
+    __tablename__ = "notifications"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True, default=lambda: str(uuid.uuid4()))
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False, default="info")  # info, warning, urgent, success
+    is_read: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    triggered_by: Mapped[str] = mapped_column(Text, nullable=False)
+    target_role: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)  # admin, clevel, architect, engineer, all
+
+
 class Run(Base):
     __tablename__ = "runs"
 
