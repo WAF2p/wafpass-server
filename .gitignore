@@ -3089,3 +3089,5 @@
 /.venv/lib/python3.11/site-packages/typing_extensions.py
 /.venv/pyvenv.cfg
 /alembic/versions/0009_add_auth_tables.py
+/.venv
+/.env
