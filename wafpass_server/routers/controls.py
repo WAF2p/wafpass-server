@@ -33,7 +33,7 @@ def _normalize_check(check: dict) -> dict:
     for common patterns like is_true, is_false, equals.
 
     Preserves full check structure when available: scope, assertions, title,
-    provider, remediation, example, on_fail.
+    provider, remediation, example, on_fail, and severity.
     """
     # If check already has required fields, return as-is (includes full structure)
     if check.get("engine") and check.get("description"):
@@ -71,6 +71,7 @@ def _normalize_check(check: dict) -> dict:
         "remediation": check.get("remediation"),
         "example": check.get("example"),
         "on_fail": check.get("on_fail"),
+        "severity": check.get("severity", "medium"),  # Include severity with fallback
     }
 
 
@@ -244,6 +245,8 @@ def _control_to_yaml(ctrl: Control) -> str:
                     check_dict["description"] = desc
                 if expected := ch.get("expected"):
                     check_dict["expected"] = expected
+                if severity := ch.get("severity"):
+                    check_dict["severity"] = severity
                 if remediation := ch.get("remediation"):
                     check_dict["remediation"] = remediation
                 if example := ch.get("example"):
