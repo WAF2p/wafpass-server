@@ -2,6 +2,9 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# Install git for update checker
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir hatchling build
 
 # Install wafpass-core from the local sibling package (pass/).
@@ -22,9 +25,17 @@ RUN pip install --no-cache-dir ".[qr]" && chmod +x entrypoint.sh
 # controls/ subdirectory is data (not Python code) and is not installed by pip.
 COPY pass/controls/ /app/controls/
 
+# Copy WAF++ framework repositories for update checking
+COPY framework/ /app/framework/
+COPY framework-en/ /app/framework-en/
+
 # Default controls path — override with WAFPASS_CONTROLS_DIR if you mount your
 # own controls volume (e.g. for custom/enterprise controls).
 ENV WAFPASS_CONTROLS_DIR=/app/controls
+
+# Framework paths for update checking
+ENV WAFPASS_FRAMEWORK_DIR=/app/framework
+ENV WAFPASS_FRAMEWORK_EN_DIR=/app/framework-en
 
 EXPOSE 8000
 

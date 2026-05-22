@@ -50,6 +50,18 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
 
 def _finding_rows(run_id: uuid.UUID, findings: list[FindingSchema]) -> list[RunFinding]:
     """Build RunFinding ORM rows from a list of FindingSchema objects."""
+    # Log severities for debugging
+    if findings:
+        severities = [f.severity for f in findings]
+        sev_counts = {}
+        for s in severities:
+            sev_counts[s] = sev_counts.get(s, 0) + 1
+        logger.info("=== _finding_rows SEVERITY DEBUG ===")
+        logger.info("Run ID: %s", run_id)
+        logger.info("Findings count: %d", len(findings))
+        logger.info("Severity distribution: %s", sev_counts)
+        logger.info("First 5 findings: %s", [(f.check_id, f.severity, f.status) for f in findings[:5]])
+        logger.info("=== END _finding_rows SEVERITY DEBUG ===")
     return [
         RunFinding(
             run_id=run_id,
@@ -92,9 +104,15 @@ async def create_run(
         for s in statuses:
             status_counts[s] = status_counts.get(s, 0) + 1
         logger.info("Status counts: %s", status_counts)
-        # Log first 5 findings
+        # Log severities
+        severities = [f.severity for f in payload.findings]
+        sev_counts = {}
+        for s in severities:
+            sev_counts[s] = sev_counts.get(s, 0) + 1
+        logger.info("Severity counts: %s", sev_counts)
+        # Log first 5 findings with severity
         for i, f in enumerate(payload.findings[:5]):
-            logger.info("  Finding[%d]: check_id=%s, status=%s, resource=%s", i, f.check_id, f.status, f.resource)
+            logger.info("  Finding[%d]: check_id=%s, status=%s, severity=%s, resource=%s", i, f.check_id, f.status, f.severity, f.resource)
     logger.info("=== END RUN PUSH DEBUG ===")
 
     run = Run(
@@ -130,9 +148,14 @@ async def create_run(
         for s in stored_statuses:
             stored_status_counts[s] = stored_status_counts.get(s, 0) + 1
         logger.info("Stored status counts: %s", stored_status_counts)
-        # Log first 5 stored findings
+        stored_severities = [f.get("severity") for f in run.findings]
+        stored_sev_counts = {}
+        for s in stored_severities:
+            stored_sev_counts[s] = stored_sev_counts.get(s, 0) + 1
+        logger.info("Stored severity counts: %s", stored_sev_counts)
+        # Log first 5 stored findings with severity
         for i, f in enumerate(run.findings[:5]):
-            logger.info("  Stored[%d]: check_id=%s, status=%s", i, f.get("check_id", "N/A"), f.get("status", "N/A"))
+            logger.info("  Stored[%d]: check_id=%s, status=%s, severity=%s", i, f.get("check_id", "N/A"), f.get("status", "N/A"), f.get("severity", "N/A"))
     logger.info("=== END STORED RUN DEBUG ===")
 
     if payload.findings:
@@ -261,8 +284,13 @@ async def get_run(
         for s in statuses:
             status_counts[s] = status_counts.get(s, 0) + 1
         logger.info("Run status counts: %s", status_counts)
+        severities = [f.severity for f in finding_rows]
+        sev_counts = {}
+        for s in severities:
+            sev_counts[s] = sev_counts.get(s, 0) + 1
+        logger.info("Run severity counts: %s", sev_counts)
         for i, f in enumerate(finding_rows[:3]):
-            logger.info("  Run.Finding[%d]: id=%s, check_id=%s, status=%s", i, f.id, f.check_id, f.status)
+            logger.info("  Run.Finding[%d]: id=%s, check_id=%s, status=%s, severity=%s", i, f.id, f.check_id, f.status, f.severity)
     logger.info("=== END GET RUN DEBUG ===")
 
     # Add comment_count to each finding row before converting to schema

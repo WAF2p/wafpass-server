@@ -412,3 +412,44 @@ class ControlOut(WizardControl):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ── Notification schemas ──────────────────────────────────────────────────────
+
+
+class NotificationBase(BaseModel):
+    """Base schema for notifications."""
+    title: str = Field(min_length=1, max_length=200)
+    message: str = Field(min_length=1, max_length=2000)
+    category: str = Field(default="info")  # info, warning, urgent, success
+    target_role: str | None = Field(default=None)  # admin, clevel, architect, engineer, all
+
+
+class NotificationCreate(NotificationBase):
+    """Request body for creating a notification."""
+    pass
+
+
+class NotificationOut(NotificationBase):
+    """Response schema for notifications."""
+    id: str
+    is_read: bool
+    created_at: datetime
+    triggered_by: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class NotificationTestIn(NotificationBase):
+    """Request body for testing a notification."""
+    pass
+
+
+class NotificationTestOut(NotificationOut):
+    """Response schema for test notifications."""
+    pass
+
+
+class NotificationUpdateRead(BaseModel):
+    """Request body for updating notification read status."""
+    is_read: bool = True

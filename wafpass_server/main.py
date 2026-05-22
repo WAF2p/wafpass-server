@@ -1,10 +1,14 @@
 """WAF++ PASS server entry point."""
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer
 
 from wafpass_server.config import settings
@@ -26,6 +30,13 @@ from wafpass_server.routers.waivers import router as waivers_router
 from wafpass_server.routers.findings_comments import router as findings_comments_router
 from wafpass_server.routers.secret_findings_comments import router as secret_findings_comments_router
 from wafpass_server.routers.widgets import router as widgets_router
+from wafpass_server.routers.notifications import router as notifications_router
+from wafpass_server.routers.update_checker import router as update_router
+
+# Framework update info path - configurable via environment variable
+_FRAMEWORK_UPDATE_INFO_PATH = os.environ.get(
+    "WAFPASS_UPDATE_INFO_PATH", "/app/framework-update-info.yml"
+)
 
 app = FastAPI(
     title="wafpass-server",
@@ -81,6 +92,22 @@ app.include_router(secret_findings_comments_router)
 app.include_router(sandbox_router)
 app.include_router(scan_router)
 app.include_router(widgets_router)
+app.include_router(notifications_router)
+app.include_router(update_router)
+
+
+@app.get("/framework-update-info.yml", tags=["updates"])
+async def get_framework_update_info() -> FileResponse:
+    """Serve the framework update information YAML file.
+
+    This endpoint returns the auto-generated update info file that contains
+    version information from both the German and English WAF++ framework repositories.
+    """
+    if not os.path.exists(_FRAMEWORK_UPDATE_INFO_PATH):
+        raise HTTPException(status_code=404, detail="Update info not available yet")
+    return FileResponse(
+        _FRAMEWORK_UPDATE_INFO_PATH, media_type="text/yaml", filename="framework-update-info.yml"
+    )
 
 
 @app.get("/health", tags=["health"])
@@ -88,9 +115,32 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+# Background task for hourly update checking
+_update_checker_task: asyncio.Task | None = None
+
+
+async def _hourly_update_checker() -> None:
+    """Background task that runs hourly update checks."""
+    import asyncio
+    from wafpass_server.update_checker import generate_update_info
+
+    while True:
+        try:
+            # Run the update check using configurable path
+            await generate_update_info(_FRAMEWORK_UPDATE_INFO_PATH)
+            logging.getLogger("wafpass_server").info("Framework update check completed")
+        except Exception as e:
+            logging.getLogger("wafpass_server").error(f"Framework update check failed: {e}")
+
+        # Sleep for 1 hour (3600 seconds)
+        await asyncio.sleep(3600)
+
+
 @app.on_event("startup")
 async def _configure_logging_and_seed_admin() -> None:
     """Configure logging and create the bootstrap admin user if no users exist."""
+    global _update_checker_task
+
     # Configure logging to show DEBUG level messages
     logging.basicConfig(
         level=logging.INFO,
@@ -99,6 +149,17 @@ async def _configure_logging_and_seed_admin() -> None:
     )
     logger = logging.getLogger("wafpass_server")
     logger.info("=== WAF++ Server starting ===")
+
+    # Generate initial update info on startup (always run, regardless of seeding)
+    logger.info("Generating initial framework update info...")
+    try:
+        from wafpass_server.update_checker import generate_update_info
+        await generate_update_info(_FRAMEWORK_UPDATE_INFO_PATH)
+        logging.getLogger("wafpass_server").info("Initial framework update info generated successfully")
+    except Exception as e:
+        logging.getLogger("wafpass_server").error(f"Failed to generate initial update info: {e}")
+        import traceback
+        logging.getLogger("wafpass_server").error(f"Traceback: {traceback.format_exc()}")
 
     if not settings.wafpass_admin_password:
         return  # seeding disabled
@@ -111,6 +172,7 @@ async def _configure_logging_and_seed_admin() -> None:
     async with AsyncSessionLocal() as db:
         count = (await db.execute(select(func.count()).select_from(User))).scalar_one()
         if count > 0:
+            logger.info("Users already exist — skipping admin seeding")
             return  # users already exist — don't overwrite anything
 
         admin = User(
@@ -128,6 +190,9 @@ async def _configure_logging_and_seed_admin() -> None:
         )
 
     logger.info("=== WAF++ Server ready ===")
+
+    # Start the hourly update checker task
+    _update_checker_task = asyncio.create_task(_hourly_update_checker())
 
 
 def start() -> None:
