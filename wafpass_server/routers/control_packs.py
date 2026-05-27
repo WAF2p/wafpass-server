@@ -48,12 +48,12 @@ def _load_yamls_from_dir(directory: Path) -> list[dict]:
 # Valid type values for WAF++ controls
 _VALID_TYPES = frozenset({"governance", "configuration", "iac", "network", "identity", "data", "cost"})
 
-# Valid pillar values (matching the schema)
-_VALID_PILLARS = frozenset({"security", "cost", "performance", "reliability", "operational", "sustainability", "sovereign"})
+# Valid pillar values (matching the schema and dashboard)
+_VALID_PILLARS = frozenset({"security", "cost", "performance", "reliability", "operations", "sustainability", "sovereign", "agentic"})
 
 # Pillar name mapping (YAML -> schema)
 _PILLAR_MAPPING = {
-    "operations": "operational",
+    "agentic": "agentic",
 }
 
 
@@ -71,8 +71,10 @@ def _raw_to_db_fields(raw: dict) -> dict:
     if not valid_types:
         valid_types = ["configuration"]  # Default type for general controls
 
-    # Normalize pillar name if needed
+    # Normalize pillar name if needed (ensure "operations" not "operational")
     pillar = str(raw.get("pillar") or "")
+    if pillar == "operational":
+        pillar = "operations"
     pillar = _PILLAR_MAPPING.get(pillar, pillar)
 
     # Parse regulatory_mapping: list of {framework, controls} dicts

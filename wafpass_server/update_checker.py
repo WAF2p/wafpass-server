@@ -193,7 +193,7 @@ async def generate_update_info(
 
     # Build the update info object
     update_info = UpdateInfo(
-        version="1.0",
+        version="1.1",
         generated_at=now_str,
         service="wafpass-server",
         framework_de=FrameworkInfo(
