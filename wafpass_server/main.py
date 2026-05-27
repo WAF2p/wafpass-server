@@ -115,6 +115,23 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/version", tags=["health"])
+async def version() -> dict[str, str]:
+    """Return version information for the server and wafpass-core."""
+    from wafpass_server import __version__ as server_version
+    try:
+        from importlib.metadata import version as _pkg_version
+        core_version = _pkg_version("wafpass-core")
+    except Exception:
+        core_version = "unknown"
+    return {
+        "server_version": server_version,
+        "core_version": core_version,
+        "wafpass_server": server_version,
+        "wafpass_core": core_version,
+    }
+
+
 # Background task for hourly update checking
 _update_checker_task: asyncio.Task | None = None
 

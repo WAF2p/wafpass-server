@@ -202,7 +202,7 @@ class ProjectPassportOut(ProjectPassportUpsert):
 
 class RunCreate(BaseModel):
     """Payload accepted by POST /runs — matches wafpass-result.json schema."""
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     project: str = ""
     branch: str = ""
     git_sha: str = ""

@@ -33,6 +33,9 @@ from wafpass_server.schemas import Envelope, FindingSchema, RunSummary
 
 router = APIRouter(prefix="/scan", tags=["scan"])
 
+# Valid pillar values (matching the schema and dashboard)
+_VALID_PILLARS = frozenset({"security", "cost", "performance", "reliability", "operations", "sustainability", "sovereign", "agentic"})
+
 # Lazy-checked once per process startup
 _wafpass_available: bool | None = None
 
@@ -216,16 +219,29 @@ async def trigger_scan(
                 regulatory_mapping=cr.control.regulatory_mapping,
             ))
 
+    # Normalize pillar names: database may have "operational", use "operations" for consistency
+    def normalize_pillar(p: str) -> str:
+        if p == "operational":
+            return "operations"
+        return p
+
     # Compute pillar scores and overall score
     pillar_totals: dict[str, list[int]] = {}
     for cr in results:
-        pillar_totals.setdefault(cr.control.pillar or "unknown", []).append(
+        normalized_pillar = normalize_pillar(cr.control.pillar or "unknown")
+        pillar_totals.setdefault(normalized_pillar, []).append(
             1 if cr.status == "PASS" else 0
         )
+    # Include all valid pillars, even if they have no controls (score = 0)
     pillar_scores: dict[str, int] = {
         p: int(sum(v) / len(v) * 100) if v else 0
         for p, v in pillar_totals.items()
+        if p in _VALID_PILLARS
     }
+    # Add any missing valid pillars with score 0
+    for p in _VALID_PILLARS:
+        if p not in pillar_scores:
+            pillar_scores[p] = 0
     score = int(sum(pillar_scores.values()) / len(pillar_scores)) if pillar_scores else 0
 
     # Build controls metadata
