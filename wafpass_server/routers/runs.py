@@ -33,6 +33,16 @@ from wafpass_server.schemas import ControlMetaSchema, Envelope, FindingSchema, M
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
+# Valid pillar values (matching the schema and dashboard)
+_VALID_PILLARS = ["security", "cost", "operations", "performance", "reliability", "sovereign", "sustainability", "agentic"]
+
+
+def _normalize_pillar_name(p: str) -> str:
+    """Normalize pillar names: database uses 'operational', use 'operations' for consistency."""
+    if p == "operational":
+        return "operations"
+    return p
+
 
 def _encode_cursor(run: Run) -> str:
     raw = f"{run.created_at.isoformat()}|{run.id}"
@@ -115,6 +125,14 @@ async def create_run(
             logger.info("  Finding[%d]: check_id=%s, status=%s, severity=%s, resource=%s", i, f.check_id, f.status, f.severity, f.resource)
     logger.info("=== END RUN PUSH DEBUG ===")
 
+    # Ensure all valid pillars are included (score 0 if missing), with client values overriding defaults
+    pillar_scores: dict[str, int] = {}
+    for p in _VALID_PILLARS:
+        pillar_scores[p] = 0
+    for p, score in payload.pillar_scores.items():
+        normalized = _normalize_pillar_name(p)
+        pillar_scores[normalized] = score
+
     run = Run(
         project=payload.project,
         branch=payload.branch,
@@ -123,7 +141,7 @@ async def create_run(
         iac_framework=payload.iac_framework,
         stage=payload.stage,
         score=payload.score,
-        pillar_scores=payload.pillar_scores,
+        pillar_scores=pillar_scores,
         findings=[f.model_dump() for f in payload.findings],
         path=payload.path,
         controls_loaded=payload.controls_loaded,

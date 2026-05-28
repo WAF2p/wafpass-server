@@ -49,7 +49,7 @@ def _load_yamls_from_dir(directory: Path) -> list[dict]:
 _VALID_TYPES = frozenset({"governance", "configuration", "iac", "network", "identity", "data", "cost"})
 
 # Valid pillar values (matching the schema and dashboard)
-_VALID_PILLARS = frozenset({"security", "cost", "performance", "reliability", "operations", "sustainability", "sovereign", "agentic"})
+_VALID_PILLARS = ["security", "cost", "operations", "performance", "reliability", "sovereign", "sustainability", "agentic"]
 
 # Pillar name mapping (YAML -> schema)
 _PILLAR_MAPPING = {
