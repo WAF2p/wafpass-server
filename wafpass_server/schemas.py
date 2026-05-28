@@ -183,7 +183,7 @@ class ProjectPassportUpsert(BaseModel):
     description: str = ""
     criticality: str = ""
     environment: str = ""
-    cloud_provider: str = ""  # aws|azure|gcp|alicloud|yandex|oci|ovh|hetzner|stackit|multi|other
+    cloud_provider: str = ""  # aws|azure|gcp|alicloud|yandex|oci|ovh|hetzner|stackit|infomaniak|leafcloud|tcloud|seeweb|exoscale|cyso|numspot|plusserver|syselev|outscale|leaseweb|scaleway|ionos|upcloud|cleura|multi|other
     repository_url: str = ""
     documentation_url: str = ""
     tags: list[str] = Field(default_factory=list)
