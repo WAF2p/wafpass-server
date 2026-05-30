@@ -214,7 +214,7 @@ class RunCreate(BaseModel):
     path: str = ""
     controls_loaded: int = 0
     controls_run: int = 0
-    detected_regions: list[list[str]] = Field(default_factory=list)
+    detected_regions: list[list[str]] = Field(default_factory=list, description="List of [region, provider, availability_zone] tuples")
     source_paths: list[str] = Field(default_factory=list)
     controls_meta: list[ControlMetaSchema] = Field(default_factory=list)
     findings: list[FindingSchema] = Field(default_factory=list)

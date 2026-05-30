@@ -177,7 +177,7 @@ async def trigger_scan(
     # Parse IaC files
     try:
         state = plugin.parse(scan_path)
-        regions: list[tuple[str, str]] = plugin.extract_regions(state)
+        regions: list[tuple[str, str, str]] = plugin.extract_regions(state)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Failed to parse IaC at '{scan_path}': {exc}") from exc
 
@@ -282,7 +282,7 @@ async def trigger_scan(
         path=str(scan_path),
         controls_loaded=len(controls),
         controls_run=len(results),
-        detected_regions=[[r, p] for r, p in regions],
+        detected_regions=[[r, p, az] for r, p, az in regions],
         source_paths=[str(scan_path)],
         controls_meta=[c.model_dump() for c in controls_meta],
         secret_findings=[],
