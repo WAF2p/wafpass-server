@@ -214,7 +214,7 @@ class RunCreate(BaseModel):
     path: str = ""
     controls_loaded: int = 0
     controls_run: int = 0
-    detected_regions: list[list[str]] = Field(default_factory=list, description="List of [region, provider, availability_zone] tuples")
+    detected_regions: list[list[str | None]] = Field(default_factory=list, description="List of [region, provider, availability_zone] tuples. availability_zone may be null for regions without AZs (e.g., GCP multi-regions).")
     source_paths: list[str] = Field(default_factory=list)
     controls_meta: list[ControlMetaSchema] = Field(default_factory=list)
     findings: list[FindingSchema] = Field(default_factory=list)
@@ -242,7 +242,7 @@ class RunSummary(BaseModel):
 
 class RunDetail(RunSummary):
     findings: list[dict[str, Any]]
-    detected_regions: list[list[str]]
+    detected_regions: list[list[str | None]]
     source_paths: list[str]
     controls_meta: list[dict[str, Any]]
     secret_findings: list[dict[str, Any]] = Field(default_factory=list)

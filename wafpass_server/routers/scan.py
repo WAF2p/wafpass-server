@@ -178,6 +178,12 @@ async def trigger_scan(
     try:
         state = plugin.parse(scan_path)
         regions: list[tuple[str, str, str]] = plugin.extract_regions(state)
+        logger.info("=== SCAN REGIONS DEBUG ===")
+        logger.info("Scan path: %s", scan_path)
+        logger.info("regions count: %d", len(regions))
+        if regions:
+            logger.info("First 5 regions entries: %s", regions[:5])
+        logger.info("=== END SCAN REGIONS DEBUG ===")
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"Failed to parse IaC at '{scan_path}': {exc}") from exc
 

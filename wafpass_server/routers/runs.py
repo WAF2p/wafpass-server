@@ -160,6 +160,9 @@ async def create_run(
     logger.info("=== STORED RUN DEBUG ===")
     logger.info("Run ID: %s", run.id)
     logger.info("Stored findings count: %d", len(run.findings or []))
+    logger.info("detected_regions count: %d", len(run.detected_regions or []))
+    if run.detected_regions:
+        logger.info("First 5 detected_regions entries: %s", run.detected_regions[:5])
     if run.findings:
         stored_statuses = [f.get("status") for f in run.findings]
         stored_status_counts = {}
@@ -296,6 +299,9 @@ async def get_run(
     logger.info("Run ID: %s", run.id)
     logger.info("Run project: %s", run.project)
     logger.info("Run findings count (from run_findings): %d", len(finding_rows))
+    logger.info("detected_regions count: %d", len(run.detected_regions or []))
+    if run.detected_regions:
+        logger.info("First 5 detected_regions entries: %s", run.detected_regions[:5])
     if finding_rows:
         statuses = [f.status for f in finding_rows]
         status_counts = {}
