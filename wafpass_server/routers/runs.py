@@ -16,17 +16,20 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import IngestAuth, get_current_user, require_ingest, require_role
+from wafpass_server.auth.deps import IngestAuth, get_current_user, require_group_access, require_ingest, require_role
 from wafpass_server.database import get_db
 from wafpass_server.models import (
     ApiKeyUsageLog,
     FindingComment,
+    ProjectGroup,
+    ProjectPassport,
     Run,
     RunFinding,
     RunSecretFinding,
     SecretFindingComment,
     User,
     UserAuditLog,
+    UserGroup,
 )
 from wafpass_server.routers.achievements import evaluate_and_record_achievements
 from wafpass_server.schemas import ControlMetaSchema, Envelope, FindingSchema, Meta, RunCreate, RunDetail, RunSummary, SecretFindingSchema
@@ -156,6 +159,14 @@ async def create_run(
     await db.commit()
     await db.refresh(run)
 
+    # Auto-create ProjectPassport if it doesn't exist
+    existing_passport = await db.get(ProjectPassport, payload.project)
+    if existing_passport is None:
+        passport = ProjectPassport(project=payload.project)
+        db.add(passport)
+        await db.commit()
+        logger.info("Auto-created ProjectPassport for project: %s", payload.project)
+
     # Log stored findings
     logger.info("=== STORED RUN DEBUG ===")
     logger.info("Run ID: %s", run.id)
@@ -218,10 +229,41 @@ async def create_run(
     return Envelope(data=RunSummary.model_validate(run, from_attributes=True))
 
 
+async def _filter_runs_by_group_access(
+    db: AsyncSession,
+    user: User,
+    stmt,
+) -> list:
+    """Filter runs list by group access for non-admin users."""
+    if user.role == "admin":
+        return None  # No filtering needed
+
+    # Get all groups the user belongs to
+    result = await db.execute(
+        select(UserGroup.group_name).where(UserGroup.user_id == user.id)
+    )
+    user_groups = result.scalars().all()
+
+    if not user_groups:
+        return []  # User has no groups, cannot access any runs
+
+    # Get all projects the user has access to
+    result = await db.execute(
+        select(ProjectGroup.project).where(ProjectGroup.group_name.in_(user_groups))
+    )
+    accessible_projects = set(result.scalars().all())
+
+    # Filter the query
+    from sqlalchemy import or_
+    stmt = stmt.where(Run.project.in_(accessible_projects))
+
+    return stmt
+
+
 @router.get("", response_model=Envelope[list[RunSummary]])
 async def list_runs(
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    user: Annotated[User, Depends(get_current_user)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None),
     project: str | None = Query(default=None),
@@ -231,13 +273,44 @@ async def list_runs(
 
     Pass the ``cursor`` value from ``meta.next_cursor`` to retrieve the next
     page.  When ``meta.next_cursor`` is null there are no more pages.
+
+    Non-admin users can only see runs for projects they have group access to.
     """
+    from wafpass_server.models import ProjectGroup
+
     stmt = select(Run).order_by(Run.created_at.desc(), Run.id.desc()).limit(limit)
 
+    # Filter by project if specified
     if project:
         stmt = stmt.where(Run.project == project)
     if stage:
         stmt = stmt.where(Run.stage == stage)
+
+    # Filter by group access for non-admins
+    if user.role != "admin":
+        # Get all groups the user belongs to
+        result = await db.execute(
+            select(UserGroup.group_name).where(UserGroup.user_id == user.id)
+        )
+        user_groups = result.scalars().all()
+
+        if not user_groups:
+            return Envelope(data=[], meta=Meta(next_cursor=None))
+
+        # Get all projects the user has access to
+        result = await db.execute(
+            select(ProjectGroup.project).where(ProjectGroup.group_name.in_(user_groups))
+        )
+        accessible_projects = set(result.scalars().all())
+
+        if not accessible_projects:
+            return Envelope(data=[], meta=Meta(next_cursor=None))
+
+        stmt = stmt.where(Run.project.in_(accessible_projects))
+
+    # Re-apply project filter if it was specified (admin override)
+    if project and user.role == "admin":
+        stmt = stmt.where(Run.project == project)
 
     if cursor:
         try:
@@ -265,11 +338,15 @@ async def list_runs(
 async def get_run(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> Envelope[RunDetail]:
     run = await db.get(Run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+
+    # Check group-based access (admins bypass this check)
+    if user.role != "admin":
+        await require_group_access(run.project, db, user)
 
     # Fetch findings from run_findings table (normalized, with IDs)
     stmt = select(RunFinding).where(RunFinding.run_id == run_id)
@@ -381,15 +458,30 @@ async def get_run(
     )
 
 
+async def _check_run_access(
+    run_id: uuid.UUID,
+    db: AsyncSession,
+    user: User,
+) -> Run:
+    """Check that user has access to the run, and return the run."""
+    run = await db.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Check group-based access (admins bypass this check)
+    if user.role != "admin":
+        await require_group_access(run.project, db, user)
+
+    return run
+
+
 @router.get("/{run_id}/controls", response_model=Envelope[list[ControlMetaSchema]])
 async def get_controls(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> Envelope[list[dict]]:
-    run = await db.get(Run, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await _check_run_access(run_id, db, user)
     return Envelope(data=run.controls_meta or [])
 
 
@@ -397,14 +489,12 @@ async def get_controls(
 async def get_findings(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    user: Annotated[User, Depends(get_current_user)],
     severity: str | None = Query(default=None),
     pillar: str | None = Query(default=None),
     status: str | None = Query(default=None),
 ) -> Envelope[list[FindingSchema]]:
-    run_exists = await db.get(Run, run_id)
-    if run_exists is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await _check_run_access(run_id, db, user)
 
     logger.info("=== GET FINDINGS DEBUG ===")
     logger.info("Run ID: %s", run_id)
@@ -484,13 +574,11 @@ def _build_sprint_controls(run: Run, sprint_ids: list[str]) -> list[dict]:
 async def export_sprint_csv(
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    user: Annotated[User, Depends(get_current_user)],
     sprint: str = Query(..., description="Comma-separated list of control IDs in sprint"),
 ) -> StreamingResponse:
     """Export sprint controls as CSV for Excel."""
-    run = await db.get(Run, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await _check_run_access(run_id, db, user)
 
     sprint_ids = [s.strip() for s in sprint.split(',') if s.strip()]
     controls = _build_sprint_controls(run, sprint_ids)
@@ -524,13 +612,11 @@ async def export_sprint_jira(
     request: Request,
     run_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    user: Annotated[User, Depends(get_current_user)],
     sprint: str = Query(..., description="Comma-separated list of control IDs in sprint"),
 ) -> StreamingResponse:
     """Export sprint controls as Jira issue bulk-create CSV."""
-    run = await db.get(Run, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await _check_run_access(run_id, db, user)
 
     sprint_ids = [s.strip() for s in sprint.split(',') if s.strip()]
     controls = _build_sprint_controls(run, sprint_ids)
@@ -577,12 +663,10 @@ async def export_sprint_slack(
     run_id: uuid.UUID,
     payload: dict[str, object],
     db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> dict[str, str]:
     """Export sprint controls as Slack/MS Teams message payload."""
-    run = await db.get(Run, run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await _check_run_access(run_id, db, user)
 
     sprint = payload.get('sprint', '')
     sprint_ids = [s.strip() for s in str(sprint).split(',') if s.strip()]

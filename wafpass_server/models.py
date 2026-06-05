@@ -4,8 +4,7 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, Integer, Text
-from sqlalchemy.orm import foreign
+from sqlalchemy import Boolean, Date, DateTime, Integer, Text, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -39,6 +38,12 @@ class User(Base):
     )
     secret_findings_comments: Mapped[list["SecretFindingComment"]] = relationship(
         "SecretFindingComment", back_populates="user", primaryjoin="User.id == foreign(SecretFindingComment.user_id)"
+    )
+    project_groups_created: Mapped[list["ProjectGroup"]] = relationship(
+        "ProjectGroup", back_populates="created_by_user", foreign_keys="[ProjectGroup.created_by]"
+    )
+    user_groups: Mapped[list["UserGroup"]] = relationship(
+        "UserGroup", back_populates="user", foreign_keys="[UserGroup.user_id]"
     )
 
 
@@ -424,3 +429,45 @@ class Run(Base):
     run_secret_findings: Mapped[list["RunSecretFinding"]] = relationship(
         "RunSecretFinding", back_populates="run", primaryjoin="Run.id == foreign(RunSecretFinding.run_id)"
     )
+
+
+class ProjectGroup(Base):
+    """Defines which groups can access which projects.
+
+    A project can have multiple groups assigned to it. Users who belong to
+    any of these groups will be able to access runs for this project.
+    """
+    __tablename__ = "project_groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    project: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    group_name: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
+    # Relationships
+    created_by_user: Mapped["User | None"] = relationship(
+        "User", back_populates="project_groups_created", foreign_keys=[created_by]
+    )
+
+
+class UserGroup(Base):
+    """Tracks which groups a user belongs to (from IdP group claims).
+
+    When a user logs in via SSO, their group memberships from the IdP
+    are stored here. This is used for authorization decisions.
+    """
+    __tablename__ = "user_groups"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
+    group_name: Mapped[str] = mapped_column(Text, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False, default="*")  # "oidc", "saml2", "*"
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    # Relationships
+    user: Mapped["User"] = relationship(
+        "User", back_populates="user_groups", primaryjoin="User.id == foreign(UserGroup.user_id)"
+    )
+
+

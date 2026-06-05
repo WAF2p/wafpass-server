@@ -453,3 +453,47 @@ class NotificationTestOut(NotificationOut):
 class NotificationUpdateRead(BaseModel):
     """Request body for updating notification read status."""
     is_read: bool = True
+
+
+# ── Project Group schemas ─────────────────────────────────────────────────────
+
+class ProjectGroupOut(BaseModel):
+    """Response schema for project groups."""
+    id: uuid.UUID
+    project: str
+    group_name: str
+    created_at: datetime
+    created_by: uuid.UUID | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectGroupCreate(BaseModel):
+    """Request body for creating a project group."""
+    project: str = Field(min_length=1, max_length=200)
+    group_name: str = Field(min_length=1, max_length=200)
+
+
+class ProjectGroupUpdate(BaseModel):
+    """Request body for updating a project group."""
+    group_name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+# ── User Group schemas ────────────────────────────────────────────────────────
+
+class UserGroupOut(BaseModel):
+    """Response schema for user groups."""
+    id: uuid.UUID
+    user_id: uuid.UUID
+    group_name: str
+    provider: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserGroupCreate(BaseModel):
+    """Request body for creating a user group (admin only, for manual assignment)."""
+    user_id: uuid.UUID
+    group_name: str = Field(min_length=1, max_length=200)
+    provider: str = "*"
