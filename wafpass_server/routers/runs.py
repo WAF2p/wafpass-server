@@ -136,11 +136,15 @@ async def create_run(
         normalized = _normalize_pillar_name(p)
         pillar_scores[normalized] = score
 
+    # Store entire run object in run_metadata to preserve all run metadata fields
+    run_metadata = payload.run.copy() if payload.run else {}
+
     run = Run(
         project=payload.project,
         branch=payload.branch,
         git_sha=payload.git_sha,
         triggered_by=payload.triggered_by,
+        run_metadata=run_metadata,
         iac_framework=payload.iac_framework,
         stage=payload.stage,
         score=payload.score,
@@ -226,7 +230,7 @@ async def create_run(
         ))
         await db.commit()
 
-    return Envelope(data=RunSummary.model_validate(run, from_attributes=True))
+    return Envelope(data=RunSummary.from_orm(run))
 
 
 async def _filter_runs_by_group_access(
@@ -329,7 +333,7 @@ async def list_runs(
 
     next_cursor = _encode_cursor(rows[-1]) if len(rows) == limit else None
     return Envelope(
-        data=[RunSummary.model_validate(r, from_attributes=True) for r in rows],
+        data=[RunSummary.from_orm(r) for r in rows],
         meta=Meta(next_cursor=next_cursor),
     )
 

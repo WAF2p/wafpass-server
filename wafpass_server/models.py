@@ -404,6 +404,7 @@ class Run(Base):
     branch: Mapped[str] = mapped_column(Text, default="")
     git_sha: Mapped[str] = mapped_column(Text, default="")
     triggered_by: Mapped[str] = mapped_column(Text, default="local")
+    run_metadata: Mapped[dict] = mapped_column(JSONB, default=dict)  # Contains is_cicd and other run metadata
     iac_framework: Mapped[str] = mapped_column(Text, default="terraform")
     stage: Mapped[str] = mapped_column(Text, default="")
     score: Mapped[int] = mapped_column(Integer, default=0)

@@ -207,6 +207,7 @@ class RunCreate(BaseModel):
     branch: str = ""
     git_sha: str = ""
     triggered_by: str = "local"
+    run: dict[str, Any] = Field(default_factory=dict, description="Run metadata including is_cicd flag")
     iac_framework: str = "terraform"
     stage: str = ""
     score: int = Field(default=0, ge=0, le=100)
@@ -228,6 +229,7 @@ class RunSummary(BaseModel):
     branch: str
     git_sha: str
     triggered_by: str
+    is_cicd: bool = Field(default=False)
     iac_framework: str
     stage: str
     score: int
@@ -236,6 +238,28 @@ class RunSummary(BaseModel):
     controls_loaded: int
     controls_run: int
     created_at: datetime
+
+    @classmethod
+    def from_orm(cls, obj: "Run") -> "RunSummary":
+        """Extract is_cicd from run_metadata dict if present."""
+        run_metadata = getattr(obj, "run_metadata", {}) or {}
+        is_cicd = run_metadata.get("is_cicd", False)
+        return cls(
+            id=obj.id,
+            project=obj.project,
+            branch=obj.branch,
+            git_sha=obj.git_sha,
+            triggered_by=obj.triggered_by,
+            is_cicd=is_cicd,
+            iac_framework=obj.iac_framework,
+            stage=obj.stage,
+            score=obj.score,
+            pillar_scores=obj.pillar_scores,
+            path=obj.path,
+            controls_loaded=obj.controls_loaded,
+            controls_run=obj.controls_run,
+            created_at=obj.created_at,
+        )
 
     model_config = {"from_attributes": True}
 
