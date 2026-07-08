@@ -119,7 +119,17 @@ SSO is configured through the dashboard **SSO Settings** page (admin only) or di
 Set `WAFPASS_API_KEY=some-secret` on the server and pass it as a header:
 
 ```bash
-wafpass check ./terraform --output json | \
+wafpass check ./infra --output json | \
+  curl -s -X POST http://localhost:8000/runs \
+       -H "Content-Type: application/json" \
+       -H "X-Api-Key: some-secret" \
+       -d @-
+```
+
+To enable dashboard Local preview / auto-fix diffs, add `--upload-source`:
+
+```bash
+wafpass check ./infra --output json --upload-source | \
   curl -s -X POST http://localhost:8000/runs \
        -H "Content-Type: application/json" \
        -H "X-Api-Key: some-secret" \
@@ -198,6 +208,15 @@ wafpass check ./infra --output json | \
        -d @-
 ```
 
+**Push a result with source snapshots (required for dashboard Local preview diffs):**
+
+```bash
+wafpass check ./infra --output json --upload-source | \
+  curl -s -X POST http://localhost:8000/runs \
+       -H "Content-Type: application/json" \
+       -d @-
+```
+
 **Set metadata before posting:**
 
 ```python
@@ -265,18 +284,18 @@ Formally accepted residual risks with approver sign-off, RFC, and traceability l
 
 ### Architect Sandbox
 
-Run the real WAF++ engine against arbitrary HCL snippets in-process. Requires `wafpass-core` and a populated `WAFPASS_CONTROLS_DIR`.
+Run the real WAF++ engine against arbitrary IaC snippets in-process. The sandbox currently evaluates HCL snippets; pass `"iac": "terraform"` (or another supported framework identifier) to select the parser. Requires `wafpass-core` and a populated `WAFPASS_CONTROLS_DIR`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/sandbox` | Evaluate HCL against all loaded controls |
+| `POST` | `/sandbox` | Evaluate an IaC snippet against all loaded controls |
 | `GET` | `/sandbox/status` | Check engine availability |
 
 ```bash
 # Check if engine is ready
 curl http://localhost:8000/sandbox/status
 
-# Run HCL snippet
+# Run an HCL snippet (Terraform example)
 curl -X POST http://localhost:8000/sandbox \
   -H "Content-Type: application/json" \
   -d '{"hcl": "resource \"aws_s3_bucket\" \"b\" {}", "iac": "terraform"}'

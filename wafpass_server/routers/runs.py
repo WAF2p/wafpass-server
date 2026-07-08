@@ -158,6 +158,7 @@ async def create_run(
         controls_meta=[c.model_dump() for c in payload.controls_meta],
         secret_findings=[sf.model_dump() for sf in payload.secret_findings],
         plan_changes=payload.plan_changes,
+        source_snapshot=payload.source_snapshot,
     )
     db.add(run)
     await db.commit()
@@ -458,6 +459,7 @@ async def get_run(
             controls_meta=run.controls_meta,
             secret_findings=secret_findings_with_counts,
             plan_changes=run.plan_changes,
+            source_snapshot=run.source_snapshot or {},
         )
     )
 

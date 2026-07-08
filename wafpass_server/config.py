@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # Leave empty to allow any path accessible to the server process (dev/local only).
     wafpass_scan_base_dir: str = ""
 
+    # Optional waivers file used by the auto-fixer to skip waived checks.
+    wafpass_waivers_file: str = ""
+
     # Base path for WAF++ framework repositories.
     # Used by the update checker to locate framework DE and EN repos.
     # Defaults to /app for containerized deployments.

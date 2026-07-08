@@ -418,6 +418,7 @@ class Run(Base):
     controls_meta: Mapped[list] = mapped_column(JSONB, default=list)
     secret_findings: Mapped[list] = mapped_column(JSONB, default=list)
     plan_changes: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    source_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)  # relative IaC file path -> file content snapshot
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     # Relationships

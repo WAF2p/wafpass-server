@@ -221,6 +221,7 @@ class RunCreate(BaseModel):
     findings: list[FindingSchema] = Field(default_factory=list)
     secret_findings: list[SecretFindingSchema] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
+    source_snapshot: dict[str, str] = Field(default_factory=dict, description="Optional IaC source file contents uploaded by the CLI so the dashboard can render Local preview diffs. Keys are relative paths; values are file content strings.")
 
 
 class RunSummary(BaseModel):
@@ -271,6 +272,7 @@ class RunDetail(RunSummary):
     controls_meta: list[dict[str, Any]]
     secret_findings: list[dict[str, Any]] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
+    source_snapshot: dict[str, str] = Field(default_factory=dict)
 
     model_config = {"from_attributes": True}
 

@@ -1,6 +1,6 @@
 """POST /scan — run the WAF++ engine against a server-side IaC path and persist as a Run.
 
-Unlike /sandbox (ephemeral, HCL-snippet only), this endpoint:
+Unlike /sandbox (ephemeral, IaC-snippet only), this endpoint:
   1. Accepts a filesystem path accessible to the server process
   2. Runs the full wafpass engine (same controls as the CLI)
   3. Persists the result as a Run record in the database
@@ -17,6 +17,7 @@ The endpoint can be disabled entirely by setting WAFPASS_SCAN_ENABLED=false.
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from pathlib import Path
 from typing import Annotated, Union
@@ -30,6 +31,8 @@ from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import ApiKeyUsageLog, Run, User
 from wafpass_server.schemas import Envelope, FindingSchema, RunSummary
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/scan", tags=["scan"])
 
@@ -150,80 +153,25 @@ async def trigger_scan(
         )
 
     # All wafpass imports are lazy so the server starts without wafpass-core
-    from wafpass.engine import run_controls  # type: ignore[import]
-    from wafpass.iac import registry  # type: ignore[import]
-    from wafpass.loader import load_controls  # type: ignore[import]
-    from wafpass.schema import (  # type: ignore[import]
-        ControlCheckMetaSchema,
-        ControlMetaSchema,
-        FindingSchema,
-    )
+    from wafpass.runner import ScanConfig, run_scan  # type: ignore[import]
 
-    # Load controls
     try:
-        controls = load_controls(controls_dir)
+        _report, result = run_scan(ScanConfig(
+            paths=[scan_path],
+            controls_dir=controls_dir,
+            iac=payload.iac,
+            project=payload.project,
+            branch=payload.branch,
+            stage=payload.stage,
+            triggered_by=payload.triggered_by,
+            upload_source=True,
+        ))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to load controls: {exc}") from exc
-
-    if not controls:
-        raise HTTPException(status_code=503, detail=f"No controls found in {controls_dir.resolve()}.")
-
-    # Resolve IaC plugin
-    plugin = registry.get(payload.iac.lower())
-    if plugin is None:
-        available = ", ".join(registry.available) or "(none)"
-        raise HTTPException(status_code=400, detail=f"Unknown IaC framework '{payload.iac}'. Available: {available}")
-
-    # Parse IaC files
-    try:
-        state = plugin.parse(scan_path)
-        regions: list[tuple[str, str, str]] = plugin.extract_regions(state)
-        logger.info("=== SCAN REGIONS DEBUG ===")
-        logger.info("Scan path: %s", scan_path)
-        logger.info("regions count: %d", len(regions))
-        if regions:
-            logger.info("First 5 regions entries: %s", regions[:5])
-        logger.info("=== END SCAN REGIONS DEBUG ===")
-    except Exception as exc:
-        raise HTTPException(status_code=422, detail=f"Failed to parse IaC at '{scan_path}': {exc}") from exc
-
-    # Run controls
-    try:
-        results = run_controls(controls, state, engine_name=payload.iac.lower())
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Engine error: {exc}") from exc
-
-    # Build findings list (mirrors cli.py --output json logic)
-    findings: list[FindingSchema] = []
-    for cr in results:
-        for chk in cr.results:
-            findings.append(FindingSchema(
-                check_id=chk.check_id,
-                check_title=chk.check_title,
-                control_id=chk.control_id,
-                pillar=cr.control.pillar,
-                severity=chk.severity,
-                status=chk.status,
-                resource=chk.resource or "",
-                message=chk.message or "",
-                remediation=chk.remediation or "",
-                example=chk.example,
-                regulatory_mapping=cr.control.regulatory_mapping,
-            ))
-        # Waived controls with no individual check results
-        if cr.status == "WAIVED" and not cr.results:
-            findings.append(FindingSchema(
-                check_id=f"{cr.control.id}-WAIVED",
-                check_title=cr.control.title,
-                control_id=cr.control.id,
-                pillar=cr.control.pillar,
-                severity=cr.control.severity,
-                status="WAIVED",
-                resource="",
-                message=getattr(cr, "waived_reason", "") or "",
-                remediation="",
-                regulatory_mapping=cr.control.regulatory_mapping,
-            ))
+        raise HTTPException(status_code=500, detail=f"Scan failed: {exc}") from exc
 
     # Normalize pillar names: database may have "operational", use "operations" for consistency
     def normalize_pillar(p: str) -> str:
@@ -231,68 +179,35 @@ async def trigger_scan(
             return "operations"
         return p
 
-    # Compute pillar scores and overall score
-    pillar_totals: dict[str, list[int]] = {}
-    for cr in results:
-        normalized_pillar = normalize_pillar(cr.control.pillar or "unknown")
-        pillar_totals.setdefault(normalized_pillar, []).append(
-            1 if cr.status == "PASS" else 0
-        )
-    # Include all valid pillars in consistent order, with score 0 if missing
-    pillar_scores: dict[str, int] = {}
-    for p in _VALID_PILLARS:
-        pillar_scores[p] = 0
-    for p, v in pillar_totals.items():
-        if p in _VALID_PILLARS:
-            pillar_scores[p] = int(sum(v) / len(v) * 100) if v else 0
-    score = int(sum(pillar_scores.values()) / len(pillar_scores)) if pillar_scores else 0
-
-    # Build controls metadata
-    controls_meta: list[ControlMetaSchema] = []
-    for ctrl in controls:
-        ctrl_checks = [
-            ControlCheckMetaSchema(
-                id=chk.id,
-                title=chk.title,
-                severity=chk.severity,
-                remediation=chk.remediation or "",
-                example=chk.example,
-            )
-            for chk in ctrl.checks
-        ]
-        controls_meta.append(ControlMetaSchema(
-            id=ctrl.id,
-            title=ctrl.title,
-            pillar=ctrl.pillar,
-            severity=ctrl.severity,
-            category=getattr(ctrl, "category", ""),
-            description=getattr(ctrl, "description", ""),
-            rationale=getattr(ctrl, "rationale", ""),
-            threat=getattr(ctrl, "threat", []),
-            regulatory_mapping=getattr(ctrl, "regulatory_mapping", []),
-            checks=ctrl_checks,
-        ))
+    # Ensure all valid pillars are represented (score 0 if missing)
+    pillar_scores: dict[str, int] = {p: 0 for p in _VALID_PILLARS}
+    for p, score in result.pillar_scores.items():
+        normalized = normalize_pillar(p)
+        if normalized in pillar_scores:
+            pillar_scores[normalized] = score
 
     # Persist as a Run record
     run = Run(
         id=uuid.uuid4(),
-        project=payload.project,
-        branch=payload.branch,
-        git_sha="",
-        triggered_by=payload.triggered_by,
-        iac_framework=payload.iac.lower(),
-        stage=payload.stage,
-        score=score,
+        project=result.project,
+        branch=result.branch,
+        git_sha=result.git_sha,
+        triggered_by=result.triggered_by,
+        run_metadata=result.run,
+        iac_framework=result.iac_framework,
+        stage=result.stage,
+        score=result.score,
         pillar_scores=pillar_scores,
-        findings=[f.model_dump() for f in findings],
-        path=str(scan_path),
-        controls_loaded=len(controls),
-        controls_run=len(results),
-        detected_regions=[[r, p, az] for r, p, az in regions],
-        source_paths=[str(scan_path)],
-        controls_meta=[c.model_dump() for c in controls_meta],
-        secret_findings=[],
-        plan_changes=None,
+        findings=[f.model_dump() for f in result.findings],
+        path=result.path,
+        controls_loaded=result.controls_loaded,
+        controls_run=result.controls_run,
+        detected_regions=result.detected_regions,
+        source_paths=result.source_paths,
+        controls_meta=[c.model_dump() for c in result.controls_meta],
+        secret_findings=[sf.model_dump() for sf in result.secret_findings],
+        plan_changes=result.plan_changes,
+        source_snapshot=result.source_snapshot,
     )
     db.add(run)
     await db.commit()
@@ -300,8 +215,9 @@ async def trigger_scan(
 
     from wafpass_server.routers.achievements import evaluate_and_record_achievements
     from wafpass_server.routers.runs import _finding_rows
-    if findings:
-        db.add_all(_finding_rows(run.id, findings))
+    server_findings = [FindingSchema(**f.model_dump()) for f in result.findings]
+    if server_findings:
+        db.add_all(_finding_rows(run.id, server_findings))
         await db.commit()
 
     await evaluate_and_record_achievements(db, run)
