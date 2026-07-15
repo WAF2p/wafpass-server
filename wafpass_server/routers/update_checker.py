@@ -15,10 +15,10 @@ _FRAMEWORK_UPDATE_INFO_PATH = "/app/framework-update-info.yml"
 
 class UpdateCheckResult(BaseModel):
     """Result of an update check."""
+
     success: bool
     error: str | None = None
-    framework_de: dict | None = None
-    framework_en: dict | None = None
+    framework: dict | None = None
     generated_at: str | None = None
 
 
@@ -28,15 +28,14 @@ async def get_update_status() -> UpdateCheckResult:
 
     This endpoint returns the cached update information from the last check.
     The update checker runs hourly to fetch the latest commit information
-    from both the German and English framework repositories.
+    from the public WAF++ framework repository on GitHub.
     """
     try:
         result = await check_for_updates()
         if result["success"]:
             return UpdateCheckResult(
                 success=True,
-                framework_de=result.get("framework_de"),
-                framework_en=result.get("framework_en"),
+                framework=result.get("framework"),
                 generated_at=result.get("generated_at"),
             )
         return UpdateCheckResult(
@@ -52,16 +51,14 @@ async def force_update_check() -> UpdateCheckResult:
     """Force an immediate update check.
 
     This endpoint triggers an immediate check for framework updates,
-    bypassing the hourly schedule. Use this to get fresh data after
-    making changes to the framework repositories.
+    bypassing the hourly schedule.
     """
     try:
         result = await check_for_updates()
         if result["success"]:
             return UpdateCheckResult(
                 success=True,
-                framework_de=result.get("framework_de"),
-                framework_en=result.get("framework_en"),
+                framework=result.get("framework"),
                 generated_at=result.get("generated_at"),
             )
         return UpdateCheckResult(
@@ -87,8 +84,7 @@ async def trigger_update_check() -> UpdateCheckResult:
         info = await generate_update_info(_FRAMEWORK_UPDATE_INFO_PATH)
         return UpdateCheckResult(
             success=True,
-            framework_de=info.framework_de.model_dump(),
-            framework_en=info.framework_en.model_dump(),
+            framework=info.framework.model_dump(),
             generated_at=info.generated_at,
         )
     except Exception as e:

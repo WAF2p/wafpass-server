@@ -32,6 +32,7 @@ from wafpass_server.routers.secret_findings_comments import router as secret_fin
 from wafpass_server.routers.widgets import router as widgets_router
 from wafpass_server.routers.notifications import router as notifications_router
 from wafpass_server.routers.update_checker import router as update_router
+from wafpass_server.routers.auto_fix import router as auto_fix_router
 
 # Framework update info path - configurable via environment variable
 _FRAMEWORK_UPDATE_INFO_PATH = os.environ.get(
@@ -51,8 +52,9 @@ app = FastAPI(
         {"name": "control-packs", "description": "Versioned control pack import, activation and rollback."},
         {"name": "waivers", "description": "Team-shared waiver records."},
         {"name": "risks", "description": "Team-shared risk acceptance records."},
-        {"name": "sandbox", "description": "Run the real WAF++ engine against arbitrary HCL snippets."},
+        {"name": "sandbox", "description": "Run the real WAF++ engine against arbitrary IaC snippets (currently HCL)."},
         {"name": "scan", "description": "Run the WAF++ engine against a server-side IaC path and persist the result."},
+        {"name": "auto-fix", "description": "Preview, apply, and roll back automated IaC remediations."},
         {"name": "sso", "description": "SSO configuration and login flows (OIDC, SAML2)."},
         {"name": "evidence", "description": "Locked, immutable evidence packages for audit handouts with QR codes."},
         {"name": "projects", "description": "Project passport — per-project metadata, editable by admin and architect."},
@@ -94,6 +96,7 @@ app.include_router(scan_router)
 app.include_router(widgets_router)
 app.include_router(notifications_router)
 app.include_router(update_router)
+app.include_router(auto_fix_router)
 
 
 @app.get("/framework-update-info.yml", tags=["updates"])
@@ -101,7 +104,7 @@ async def get_framework_update_info() -> FileResponse:
     """Serve the framework update information YAML file.
 
     This endpoint returns the auto-generated update info file that contains
-    version information from both the German and English WAF++ framework repositories.
+    version information from the public WAF++ framework repository on GitHub.
     """
     if not os.path.exists(_FRAMEWORK_UPDATE_INFO_PATH):
         raise HTTPException(status_code=404, detail="Update info not available yet")
@@ -113,6 +116,23 @@ async def get_framework_update_info() -> FileResponse:
 @app.get("/health", tags=["health"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/version", tags=["health"])
+async def version() -> dict[str, str]:
+    """Return version information for the server and wafpass-core."""
+    from wafpass_server import __version__ as server_version
+    try:
+        from importlib.metadata import version as _pkg_version
+        core_version = _pkg_version("wafpass-core")
+    except Exception:
+        core_version = "unknown"
+    return {
+        "server_version": server_version,
+        "core_version": core_version,
+        "wafpass_server": server_version,
+        "wafpass_core": core_version,
+    }
 
 
 # Background task for hourly update checking

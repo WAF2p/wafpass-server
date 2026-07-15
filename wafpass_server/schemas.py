@@ -183,7 +183,7 @@ class ProjectPassportUpsert(BaseModel):
     description: str = ""
     criticality: str = ""
     environment: str = ""
-    cloud_provider: str = ""  # aws|azure|gcp|alicloud|yandex|oci|ovh|hetzner|stackit|multi|other
+    cloud_provider: str = ""  # aws|azure|gcp|alicloud|yandex|oci|ovh|hetzner|stackit|infomaniak|leafcloud|tcloud|seeweb|exoscale|cyso|numspot|plusserver|syselev|outscale|leaseweb|scaleway|ionos|upcloud|cleura|multi|other
     repository_url: str = ""
     documentation_url: str = ""
     tags: list[str] = Field(default_factory=list)
@@ -202,11 +202,12 @@ class ProjectPassportOut(ProjectPassportUpsert):
 
 class RunCreate(BaseModel):
     """Payload accepted by POST /runs — matches wafpass-result.json schema."""
-    schema_version: str = "1.0"
+    schema_version: str = "1.1"
     project: str = ""
     branch: str = ""
     git_sha: str = ""
     triggered_by: str = "local"
+    run: dict[str, Any] = Field(default_factory=dict, description="Run metadata including is_cicd flag")
     iac_framework: str = "terraform"
     stage: str = ""
     score: int = Field(default=0, ge=0, le=100)
@@ -214,12 +215,13 @@ class RunCreate(BaseModel):
     path: str = ""
     controls_loaded: int = 0
     controls_run: int = 0
-    detected_regions: list[list[str]] = Field(default_factory=list)
+    detected_regions: list[list[str | None]] = Field(default_factory=list, description="List of [region, provider, availability_zone] tuples. availability_zone may be null for regions without AZs (e.g., GCP multi-regions).")
     source_paths: list[str] = Field(default_factory=list)
     controls_meta: list[ControlMetaSchema] = Field(default_factory=list)
     findings: list[FindingSchema] = Field(default_factory=list)
     secret_findings: list[SecretFindingSchema] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
+    source_snapshot: dict[str, str] = Field(default_factory=dict, description="Optional IaC source file contents uploaded by the CLI so the dashboard can render Local preview diffs. Keys are relative paths; values are file content strings.")
 
 
 class RunSummary(BaseModel):
@@ -228,6 +230,7 @@ class RunSummary(BaseModel):
     branch: str
     git_sha: str
     triggered_by: str
+    is_cicd: bool = Field(default=False)
     iac_framework: str
     stage: str
     score: int
@@ -237,16 +240,39 @@ class RunSummary(BaseModel):
     controls_run: int
     created_at: datetime
 
+    @classmethod
+    def from_orm(cls, obj: "Run") -> "RunSummary":
+        """Extract is_cicd from run_metadata dict if present."""
+        run_metadata = getattr(obj, "run_metadata", {}) or {}
+        is_cicd = run_metadata.get("is_cicd", False)
+        return cls(
+            id=obj.id,
+            project=obj.project,
+            branch=obj.branch,
+            git_sha=obj.git_sha,
+            triggered_by=obj.triggered_by,
+            is_cicd=is_cicd,
+            iac_framework=obj.iac_framework,
+            stage=obj.stage,
+            score=obj.score,
+            pillar_scores=obj.pillar_scores,
+            path=obj.path,
+            controls_loaded=obj.controls_loaded,
+            controls_run=obj.controls_run,
+            created_at=obj.created_at,
+        )
+
     model_config = {"from_attributes": True}
 
 
 class RunDetail(RunSummary):
     findings: list[dict[str, Any]]
-    detected_regions: list[list[str]]
+    detected_regions: list[list[str | None]]
     source_paths: list[str]
     controls_meta: list[dict[str, Any]]
     secret_findings: list[dict[str, Any]] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
+    source_snapshot: dict[str, str] = Field(default_factory=dict)
 
     model_config = {"from_attributes": True}
 
@@ -453,3 +479,47 @@ class NotificationTestOut(NotificationOut):
 class NotificationUpdateRead(BaseModel):
     """Request body for updating notification read status."""
     is_read: bool = True
+
+
+# ── Project Group schemas ─────────────────────────────────────────────────────
+
+class ProjectGroupOut(BaseModel):
+    """Response schema for project groups."""
+    id: uuid.UUID
+    project: str
+    group_name: str
+    created_at: datetime
+    created_by: uuid.UUID | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ProjectGroupCreate(BaseModel):
+    """Request body for creating a project group."""
+    project: str = Field(min_length=1, max_length=200)
+    group_name: str = Field(min_length=1, max_length=200)
+
+
+class ProjectGroupUpdate(BaseModel):
+    """Request body for updating a project group."""
+    group_name: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+# ── User Group schemas ────────────────────────────────────────────────────────
+
+class UserGroupOut(BaseModel):
+    """Response schema for user groups."""
+    id: uuid.UUID
+    user_id: uuid.UUID
+    group_name: str
+    provider: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserGroupCreate(BaseModel):
+    """Request body for creating a user group (admin only, for manual assignment)."""
+    user_id: uuid.UUID
+    group_name: str = Field(min_length=1, max_length=200)
+    provider: str = "*"

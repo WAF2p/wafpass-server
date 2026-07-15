@@ -51,10 +51,20 @@ class Settings(BaseSettings):
     # Leave empty to allow any path accessible to the server process (dev/local only).
     wafpass_scan_base_dir: str = ""
 
+    # Optional waivers file used by the auto-fixer to skip waived checks.
+    wafpass_waivers_file: str = ""
+
     # Base path for WAF++ framework repositories.
-    # Used by the update checker to locate framework DE and EN repos.
+    # Legacy: used by the update checker to locate a local framework clone.
     # Defaults to /app for containerized deployments.
     wafpass_base_path: str = "/app"
+
+    # Public Git URL for the WAF++ framework repository.
+    # The update checker fetches version and commit information from this repo.
+    wafpass_framework_repo_url: str = "https://github.com/WAF2p/framework"
+
+    # Branch to read framework version/commit information from.
+    wafpass_framework_branch: str = "main"
 
     # ── At-rest encryption for SSO secrets ───────────────────────────────────
     # Backend: "local" (default) | "aws_sm" | "vault_transit"

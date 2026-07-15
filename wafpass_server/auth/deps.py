@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wafpass_server.auth.jwt_utils import decode_access_token
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
-from wafpass_server.models import ApiKey, User
+from wafpass_server.models import ApiKey, ProjectGroup, User, UserGroup
 
 
 @dataclass
@@ -126,4 +126,46 @@ async def require_ingest(
         status.HTTP_401_UNAUTHORIZED,
         detail="Provide a Bearer token or X-Api-Key header.",
         headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+async def require_group_access(
+    project: str,
+    db: AsyncSession,
+    user: User,
+) -> None:
+    """Check if user has access to a project via group membership.
+
+    Users can access a project if:
+    1. They have role "admin", OR
+    2. They belong to any group that is mapped to the project
+
+    Raises HTTPException if access is denied.
+    """
+    # Admins have full access
+    if user.role == "admin":
+        return
+
+    # Get all groups the user belongs to
+    result = await db.execute(
+        select(UserGroup.group_name).where(UserGroup.user_id == user.id)
+    )
+    user_groups = set(result.scalars().all())
+
+    # Get all groups that have access to this project
+    result = await db.execute(
+        select(ProjectGroup.group_name).where(ProjectGroup.project == project)
+    )
+    project_groups = set(result.scalars().all())
+
+    # Check for intersection
+    if user_groups & project_groups:
+        return
+
+    # No matching group found
+    raise HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        detail=f"You do not have access to project '{project}'. "
+               f"Required group membership: {list(project_groups)}. "
+               f"Your groups: {list(user_groups)}.",
     )

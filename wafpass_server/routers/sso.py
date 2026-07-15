@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select, distinct
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import jwt as _jwt
@@ -22,7 +22,15 @@ from wafpass_server.auth.deps import require_role
 from wafpass_server.auth.jwt_utils import create_access_token
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
-from wafpass_server.models import GroupRoleMapping, RefreshToken, SsoConfig, User, UserAuditLog
+from wafpass_server.models import (
+    GroupRoleMapping,
+    ProjectGroup,
+    RefreshToken,
+    SsoConfig,
+    User,
+    UserAuditLog,
+    UserGroup,
+)
 from wafpass_server.secret_enc import decrypt_field, encrypt_field, is_encrypted_blob
 
 router = APIRouter(tags=["sso"])
@@ -124,6 +132,34 @@ async def _resolve_role_from_groups(
     )
     row = result.scalar_one_or_none()
     return row.role if row else None
+
+
+async def _update_user_groups(
+    db: AsyncSession,
+    user_id: uuid.UUID,
+    provider: str,
+    group_values: list[str],
+) -> None:
+    """Update user's group memberships, removing old groups and adding new ones."""
+    # Remove existing groups for this user/provider
+    result = await db.execute(
+        select(UserGroup).where(
+            UserGroup.user_id == user_id,
+            UserGroup.provider == provider,
+        )
+    )
+    existing_groups = list(result.scalars().all())
+    for group in existing_groups:
+        await db.delete(group)
+
+    # Add new groups
+    for group_name in group_values:
+        user_group = UserGroup(
+            user_id=user_id,
+            group_name=group_name,
+            provider=provider,
+        )
+        db.add(user_group)
 
 
 async def _issue_tokens(db: AsyncSession, user: User) -> tuple[str, str]:
@@ -395,6 +431,236 @@ async def delete_group_mapping(
         await db.commit()
 
 
+# ── Project Group API (admin only) ────────────────────────────────────────────
+
+
+class ProjectGroupOut(BaseModel):
+    """Response schema for project groups."""
+    id: str
+    project: str
+    group_name: str
+    created_at: datetime | None = None
+    created_by: str | None = None
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_orm_row(cls, row: ProjectGroup) -> "ProjectGroupOut":
+        return cls(
+            id=str(row.id),
+            project=row.project,
+            group_name=row.group_name,
+            created_at=row.created_at,
+            created_by=str(row.created_by) if row.created_by else None,
+        )
+
+
+class ProjectGroupCreate(BaseModel):
+    """Request body for creating a project group."""
+    project: str
+    group_name: str
+
+
+@router.get("/projects/{project}/groups", response_model=list[ProjectGroupOut])
+async def list_project_groups(
+    project: str,
+    _: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[ProjectGroupOut]:
+    """List all groups that have access to a project."""
+    result = await db.execute(
+        select(ProjectGroup).where(ProjectGroup.project == project).order_by(ProjectGroup.group_name)
+    )
+    return [ProjectGroupOut.from_orm_row(r) for r in result.scalars().all()]
+
+
+class GroupOut(BaseModel):
+    """Response schema for a group (without project context)."""
+    group_name: str
+    projects: list[str]
+    user_count: int
+    created_at: datetime
+
+
+@router.get("/groups", response_model=list[GroupOut])
+async def list_all_groups(
+    _: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[GroupOut]:
+    """List all groups across all projects with their associated projects and user counts."""
+    # Get unique group names
+    groups_result = await db.execute(
+        select(ProjectGroup.group_name)
+        .distinct()
+        .order_by(ProjectGroup.group_name)
+    )
+    group_names = groups_result.scalars().all()
+    print(f"DEBUG: raw group_names: {group_names}")
+    print(f"DEBUG: group_names type: {type(group_names)}")
+
+    # Fetch projects per group
+    group_projects_result = await db.execute(
+        select(ProjectGroup.group_name, ProjectGroup.project)
+        .order_by(ProjectGroup.group_name, ProjectGroup.project)
+    )
+    group_projects_map: dict[str, list[str]] = {}
+    for row in group_projects_result.all():
+        if row[0] not in group_projects_map:
+            group_projects_map[row[0]] = []
+        if row[1] not in group_projects_map[row[0]]:
+            group_projects_map[row[0]].append(row[1])
+
+    # Get user counts per group
+    user_count_result = await db.execute(
+        select(UserGroup.group_name, func.count(UserGroup.id).label("count"))
+        .group_by(UserGroup.group_name)
+    )
+    user_counts = {row[0]: row[1] for row in user_count_result.all()}
+
+    # Get creation date per group (earliest creation date)
+    created_result = await db.execute(
+        select(ProjectGroup.group_name, func.min(ProjectGroup.created_at).label("min_created"))
+        .group_by(ProjectGroup.group_name)
+    )
+    created_dates = {row[0]: row[1] for row in created_result.all()}
+
+    return [
+        GroupOut(
+            group_name=group_name,
+            projects=sorted(group_projects_map.get(group_name, [])),
+            user_count=user_counts.get(group_name, 0),
+            created_at=created_dates.get(group_name, datetime.now(timezone.utc)),
+        )
+        for group_name in group_names
+    ]
+
+
+@router.post("/projects/{project}/groups", response_model=ProjectGroupOut, status_code=201)
+async def create_project_group(
+    project: str,
+    payload: ProjectGroupCreate,
+    acting_user: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> ProjectGroupOut:
+    """Add a group to a project's access list."""
+    if payload.project != project:
+        raise HTTPException(400, detail="Project in path and body must match.")
+    row = ProjectGroup(
+        project=project,
+        group_name=payload.group_name,
+        created_by=acting_user.id,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return ProjectGroupOut.from_orm_row(row)
+
+
+@router.delete("/projects/{project}/groups/{group_name}", status_code=204)
+async def delete_project_group(
+    project: str,
+    group_name: str,
+    _: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Remove a group from a project's access list."""
+    result = await db.execute(
+        select(ProjectGroup).where(
+            ProjectGroup.project == project,
+            ProjectGroup.group_name == group_name,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        await db.delete(row)
+        await db.commit()
+
+
+# ── User Group API (admin only) ───────────────────────────────────────────────
+
+
+class UserGroupOut(BaseModel):
+    """Response schema for user groups."""
+    id: str
+    user_id: str
+    group_name: str
+    provider: str
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+    @classmethod
+    def from_orm_row(cls, row: UserGroup) -> "UserGroupOut":
+        return cls(
+            id=str(row.id),
+            user_id=str(row.user_id),
+            group_name=row.group_name,
+            provider=row.provider,
+            created_at=row.created_at,
+        )
+
+
+class UserGroupCreate(BaseModel):
+    """Request body for creating a user group (manual assignment)."""
+    group_name: str
+    provider: str = "*"
+
+
+@router.get("/auth/users/{user_id}/groups", response_model=list[UserGroupOut])
+async def list_user_groups(
+    user_id: str,
+    _: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> list[UserGroupOut]:
+    """List all groups a user belongs to."""
+    result = await db.execute(
+        select(UserGroup).where(UserGroup.user_id == uuid.UUID(user_id)).order_by(UserGroup.group_name)
+    )
+    return [UserGroupOut.from_orm_row(r) for r in result.scalars().all()]
+
+
+@router.post("/auth/users/{user_id}/groups", response_model=UserGroupOut, status_code=201)
+async def create_user_group(
+    user_id: str,
+    payload: UserGroupCreate,
+    acting_user: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> UserGroupOut:
+    """Add a group to a user's membership (manual admin assignment)."""
+    user = await db.get(User, uuid.UUID(user_id))
+    if user is None:
+        raise HTTPException(404, detail="User not found.")
+    row = UserGroup(
+        user_id=uuid.UUID(user_id),
+        group_name=payload.group_name,
+        provider=payload.provider,
+    )
+    db.add(row)
+    await db.commit()
+    await db.refresh(row)
+    return UserGroupOut.from_orm_row(row)
+
+
+@router.delete("/auth/users/{user_id}/groups/{group_name}", status_code=204)
+async def delete_user_group(
+    user_id: str,
+    group_name: str,
+    _: Annotated[User, Depends(require_role("admin"))],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> None:
+    """Remove a group from a user's membership."""
+    result = await db.execute(
+        select(UserGroup).where(
+            UserGroup.user_id == uuid.UUID(user_id),
+            UserGroup.group_name == group_name,
+        )
+    )
+    row = result.scalar_one_or_none()
+    if row:
+        await db.delete(row)
+        await db.commit()
+
+
 # ── Public: list enabled providers for login page ─────────────────────────────
 
 @router.get("/sso/providers", response_model=list[SsoProviderInfo])
@@ -596,6 +862,17 @@ async def oidc_callback(
     except HTTPException as exc:
         return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=access_denied&detail={exc.detail}", status_code=302)
 
+    # Update user's group memberships
+    group_claim = cfg.get("group_claim")
+    group_values = []
+    if group_claim:
+        groups = claims.get(group_claim)
+        if isinstance(groups, list):
+            group_values = [g for g in groups if g]
+        elif groups:
+            group_values = [groups] if isinstance(groups, str) else list(groups)
+    await _update_user_groups(db, user.id, "oidc", group_values)
+
     access_token, raw_refresh = await _issue_tokens(db, user)
     await _audit(db, user.id, "sso.login", {"provider": "oidc"}, ip=_ip(request))
     await db.commit()
@@ -724,6 +1001,17 @@ async def saml_acs(
         user = await _provision_user(db, username, display_name, "saml2", role, cfg.get("auto_provision", True))
     except HTTPException as exc:
         return RedirectResponse(f"{frontend_url.rstrip('/')}?sso_error=access_denied&detail={exc.detail}", status_code=302)
+
+    # Update user's group memberships
+    group_attr = cfg.get("group_attribute")
+    group_values = []
+    if group_attr:
+        groups = attrs.get(group_attr)
+        if isinstance(groups, list):
+            group_values = [g for g in groups if g]
+        elif groups:
+            group_values = [groups] if isinstance(groups, str) else list(groups)
+    await _update_user_groups(db, user.id, "saml2", group_values)
 
     access_token, raw_refresh = await _issue_tokens(db, user)
     await _audit(db, user.id, "sso.login", {"provider": "saml2"}, ip=_ip(request))

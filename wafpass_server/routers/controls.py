@@ -327,10 +327,14 @@ async def get_active_pack_info(
     if pack is None:
         return Envelope(data=None)
 
+    # Live count of controls currently in the catalogue (may include custom controls)
+    catalogue_count = (await db.execute(select(func.count()).select_from(Control))).scalar() or 0
+
     return Envelope(data={
         "version": pack.version,
         "description": pack.description,
         "control_count": pack.control_count,
+        "catalogue_count": catalogue_count,
         "imported_at": pack.imported_at.isoformat(),
         "activated_at": pack.activated_at.isoformat() if pack.activated_at else None,
     })

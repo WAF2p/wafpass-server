@@ -17,7 +17,7 @@ from wafpass_server.auth.jwt_utils import create_access_token
 from wafpass_server.auth.providers.local import authenticate_local, hash_password
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
-from wafpass_server.models import ApiKey, ApiKeyUsageLog, RefreshToken, User, UserAuditLog
+from wafpass_server.models import ApiKey, ApiKeyUsageLog, RefreshToken, User, UserAuditLog, UserGroup
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -86,6 +86,7 @@ class UserCreate(BaseModel):
     display_name: str = ""
     image_url: str = ""
     role: str = "clevel"
+    group: str | None = None  # Optional group name to assign to user
 
 
 class UserUpdate(BaseModel):
@@ -94,6 +95,7 @@ class UserUpdate(BaseModel):
     role: str | None = None
     is_active: bool | None = None
     password: str | None = Field(default=None, min_length=8)
+    group: str | None = None  # Optional group name to add to user
 
 
 # ── Auth endpoints ────────────────────────────────────────────────────────────
@@ -303,10 +305,28 @@ async def create_user(
     )
     db.add(user)
     await db.flush()   # get user.id before audit row
+
+    # Assign group to user if specified
+    if payload.group:
+        existing_group = await db.execute(
+            select(UserGroup).where(
+                UserGroup.user_id == user.id,
+                UserGroup.group_name == payload.group
+            )
+        )
+        if existing_group.scalar_one_or_none() is None:
+            user_group = UserGroup(
+                user_id=user.id,
+                group_name=payload.group,
+                provider="*"
+            )
+            db.add(user_group)
+
     await _audit(db, acting_user.id, "user.create", {
         "target_id": str(user.id),
         "target_username": user.username,
         "target_role": user.role,
+        "target_group": payload.group,
     }, ip=_ip(request))
     await db.commit()
     await db.refresh(user)
@@ -344,6 +364,22 @@ async def update_user(
     if payload.password is not None:
         user.password_hash = hash_password(payload.password)
         changed_fields.append("password")
+    if payload.group is not None:
+        # Add user to specified group
+        existing_group = await db.execute(
+            select(UserGroup).where(
+                UserGroup.user_id == user.id,
+                UserGroup.group_name == payload.group
+            )
+        )
+        if existing_group.scalar_one_or_none() is None:
+            user_group = UserGroup(
+                user_id=user.id,
+                group_name=payload.group,
+                provider="*"
+            )
+            db.add(user_group)
+            changed_fields.append("group")
     await _audit(db, acting_user.id, "user.update", {
         "target_id": str(user.id),
         "target_username": user.username,

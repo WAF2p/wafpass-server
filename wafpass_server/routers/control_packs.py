@@ -48,12 +48,12 @@ def _load_yamls_from_dir(directory: Path) -> list[dict]:
 # Valid type values for WAF++ controls
 _VALID_TYPES = frozenset({"governance", "configuration", "iac", "network", "identity", "data", "cost"})
 
-# Valid pillar values (matching the schema)
-_VALID_PILLARS = frozenset({"security", "cost", "performance", "reliability", "operational", "sustainability", "sovereign"})
+# Valid pillar values (matching the schema and dashboard)
+_VALID_PILLARS = ["security", "cost", "operations", "performance", "reliability", "sovereign", "sustainability", "agentic"]
 
 # Pillar name mapping (YAML -> schema)
 _PILLAR_MAPPING = {
-    "operations": "operational",
+    "agentic": "agentic",
 }
 
 
@@ -71,8 +71,10 @@ def _raw_to_db_fields(raw: dict) -> dict:
     if not valid_types:
         valid_types = ["configuration"]  # Default type for general controls
 
-    # Normalize pillar name if needed
+    # Normalize pillar name if needed (ensure "operations" not "operational")
     pillar = str(raw.get("pillar") or "")
+    if pillar == "operational":
+        pillar = "operations"
     pillar = _PILLAR_MAPPING.get(pillar, pillar)
 
     # Parse regulatory_mapping: list of {framework, controls} dicts
@@ -128,6 +130,39 @@ async def _apply_snapshot(db: AsyncSession, snapshot: list[dict]) -> None:
 
 def _pack_to_out(pack: ControlPack) -> ControlPackOut:
     return ControlPackOut.model_validate(pack, from_attributes=True)
+
+
+def _write_snapshot_to_dir(snapshot: list[dict], directory: Path) -> None:
+    """Persist *snapshot* as YAML files in *directory*.
+
+    The directory contents are synchronised to match the snapshot exactly:
+    existing *.yml files are removed before writing the new controls so that
+    scans always use the active pack and never stale files from a previous
+    version.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+
+    # Remove existing control files so the directory reflects the snapshot exactly
+    for existing in directory.glob("*.yml"):
+        try:
+            existing.unlink()
+        except OSError:
+            pass
+    for existing in directory.glob("*.yaml"):
+        try:
+            existing.unlink()
+        except OSError:
+            pass
+
+    for raw in snapshot:
+        control_id = raw.get("id")
+        if not control_id:
+            continue
+        out_path = directory / f"{control_id}.yml"
+        out_path.write_text(
+            yaml.safe_dump(raw, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -191,6 +226,7 @@ async def sync_pack(
         )
 
     await _apply_snapshot(db, snapshot)
+    _write_snapshot_to_dir(snapshot, controls_dir)
 
     # Deactivate all existing packs before marking the new one active
     await db.execute(update(ControlPack).values(is_active=False))
@@ -272,6 +308,7 @@ async def upload_pack(
         raise HTTPException(422, detail="No valid WAF++ control definitions found in the ZIP archive.")
 
     await _apply_snapshot(db, snapshot)
+    _write_snapshot_to_dir(snapshot, Path(settings.wafpass_controls_dir))
     await db.execute(update(ControlPack).values(is_active=False))
 
     now = _now()
@@ -304,6 +341,7 @@ async def activate_pack(
         raise HTTPException(404, detail=f"Control pack '{version}' not found.")
 
     await _apply_snapshot(db, pack.controls_snapshot)
+    _write_snapshot_to_dir(pack.controls_snapshot, Path(settings.wafpass_controls_dir))
 
     await db.execute(update(ControlPack).values(is_active=False))
     pack.is_active = True
