@@ -104,7 +104,7 @@ async def get_framework_update_info() -> FileResponse:
     """Serve the framework update information YAML file.
 
     This endpoint returns the auto-generated update info file that contains
-    version information from both the German and English WAF++ framework repositories.
+    version information from the public WAF++ framework repository on GitHub.
     """
     if not os.path.exists(_FRAMEWORK_UPDATE_INFO_PATH):
         raise HTTPException(status_code=404, detail="Update info not available yet")

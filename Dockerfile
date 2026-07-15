@@ -25,17 +25,15 @@ RUN pip install --no-cache-dir ".[qr]" && chmod +x entrypoint.sh
 # controls/ subdirectory is data (not Python code) and is not installed by pip.
 COPY pass/controls/ /app/controls/
 
-# Copy WAF++ framework repositories for update checking
+# Copy WAF++ framework repository for update checking
 COPY framework/ /app/framework/
-COPY framework-en/ /app/framework-en/
 
 # Default controls path — override with WAFPASS_CONTROLS_DIR if you mount your
 # own controls volume (e.g. for custom/enterprise controls).
 ENV WAFPASS_CONTROLS_DIR=/app/controls
 
-# Framework paths for update checking
+# Framework path for update checking
 ENV WAFPASS_FRAMEWORK_DIR=/app/framework
-ENV WAFPASS_FRAMEWORK_EN_DIR=/app/framework-en
 
 EXPOSE 8000
 
