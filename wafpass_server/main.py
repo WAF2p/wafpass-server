@@ -43,8 +43,8 @@ app = FastAPI(
     title="wafpass-server",
     version="1.0.0",
     description="REST API for persisting and querying WAF++ PASS scan results.",
-    docs_url="/api/docs",
-    redoc_url="/api/redoc",
+    docs_url="/api/v1/docs",
+    redoc_url="/api/v1/redoc",
     openapi_tags=[
         {"name": "auth", "description": "Login, token refresh, logout, user management."},
         {"name": "runs", "description": "Scan run results ingestion and retrieval."},
@@ -76,27 +76,27 @@ app.add_middleware(
     expose_headers=[],
 )
 
-app.include_router(auth_router)
-app.include_router(compliance_audit_router)
-app.include_router(sso_router)
-app.include_router(achievements_router)
-app.include_router(badges_router)
-app.include_router(leaderboard_router)
-app.include_router(runs_router)
-app.include_router(controls_router)
-app.include_router(control_packs_router)
-app.include_router(waivers_router)
-app.include_router(risks_router)
-app.include_router(evidence_router)
-app.include_router(projects_router)
-app.include_router(findings_comments_router)
-app.include_router(secret_findings_comments_router)
-app.include_router(sandbox_router)
-app.include_router(scan_router)
-app.include_router(widgets_router)
-app.include_router(notifications_router)
-app.include_router(update_router)
-app.include_router(auto_fix_router)
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(compliance_audit_router, prefix="/api/v1")
+app.include_router(sso_router, prefix="/api/v1")
+app.include_router(achievements_router, prefix="/api/v1")
+app.include_router(badges_router, prefix="/api/v1")
+app.include_router(leaderboard_router, prefix="/api/v1")
+app.include_router(runs_router, prefix="/api/v1")
+app.include_router(controls_router, prefix="/api/v1")
+app.include_router(control_packs_router, prefix="/api/v1")
+app.include_router(waivers_router, prefix="/api/v1")
+app.include_router(risks_router, prefix="/api/v1")
+app.include_router(evidence_router, prefix="/api/v1")
+app.include_router(projects_router, prefix="/api/v1")
+app.include_router(findings_comments_router, prefix="/api/v1")
+app.include_router(secret_findings_comments_router, prefix="/api/v1")
+app.include_router(sandbox_router, prefix="/api/v1")
+app.include_router(scan_router, prefix="/api/v1")
+app.include_router(widgets_router, prefix="/api/v1")
+app.include_router(notifications_router, prefix="/api/v1")
+app.include_router(update_router, prefix="/api/v1")
+app.include_router(auto_fix_router, prefix="/api/v1")
 
 
 @app.get("/framework-update-info.yml", tags=["updates"])

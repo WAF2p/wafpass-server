@@ -61,7 +61,7 @@ class UserAuditLog(Base):
 
 
 class RefreshToken(Base):
-    """Hashed refresh token records — rotated on every /auth/refresh call.
+    """Hashed refresh token records — rotated on every /api/v1/auth/refresh call.
 
     All tokens in a rotation chain share the same ``family_id``.  Presenting a
     revoked token from a known family triggers family-wide revocation (stolen
@@ -141,13 +141,13 @@ class RiskAcceptance(Base):
 
 
 class ApiKeyUsageLog(Base):
-    """One row per API-key-authenticated ingest request (POST /runs or POST /scan)."""
+    """One row per API-key-authenticated ingest request (POST /api/v1/runs or POST /api/v1/scan)."""
     __tablename__ = "api_key_usage_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     api_key_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
-    endpoint: Mapped[str] = mapped_column(Text, nullable=False)          # "POST /runs" | "POST /scan"
+    endpoint: Mapped[str] = mapped_column(Text, nullable=False)          # "POST /api/v1/runs" | "POST /api/v1/scan"
     run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     project: Mapped[str] = mapped_column(Text, default="")
     branch: Mapped[str] = mapped_column(Text, default="")

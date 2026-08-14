@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     wafpass_admin_role: str = "admin"
 
     # Pre-shared API key for machine-to-machine access (CI/CD --push workflow).
-    # Empty = disabled.  Set X-Api-Key header to this value on POST /runs / POST /scan.
+    # Empty = disabled.  Set X-Api-Key header to this value on POST /api/v1/runs / POST /api/v1/scan.
     wafpass_api_key: str = ""
 
     # Public base URL used to build absolute links in QR codes and audit reports.
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     wafpass_public_url: str = ""
 
     # Server-side scan settings
-    # Set WAFPASS_SCAN_ENABLED=false to disable POST /scan entirely.
+    # Set WAFPASS_SCAN_ENABLED=false to disable POST /api/v1/scan entirely.
     wafpass_scan_enabled: bool = True
     # If set, all scan paths must resolve within this directory (path-traversal guard).
     # Leave empty to allow any path accessible to the server process (dev/local only).
