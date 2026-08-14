@@ -1,4 +1,4 @@
-"""Smoke tests for the /runs endpoints.
+"""Smoke tests for the /api/v1/runs endpoints.
 
 Integration tests require a running PostgreSQL instance. Set DATABASE_URL
 in the environment or .env file before running.

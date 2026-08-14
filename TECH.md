@@ -2,6 +2,8 @@
 
 This document covers internal architecture, design decisions, technical debt, and contribution guidance for `wafpass-server`. For user-facing documentation see `README.md`.
 
+> **BREAKING CHANGE:** All API routes are now mounted under `/api/v1`. Router prefixes in `wafpass_server/routers/*.py` remain unchanged (e.g. `/auth`, `/runs`); `main.py` adds the `/api/v1` mount prefix. `/health`, `/version`, and `/framework-update-info.yml` stay at the root.
+
 ---
 
 ## Directory structure
@@ -9,7 +11,7 @@ This document covers internal architecture, design decisions, technical debt, an
 ```
 wafpass-server/
 ├── wafpass_server/
-│   ├── main.py          # FastAPI app factory, middleware, router registration, /health, startup seeding
+│   ├── main.py          # FastAPI app factory, middleware, router registration under /api/v1, /health, startup seeding
 │   ├── config.py        # Settings via pydantic-settings (env var parsing)
 │   ├── database.py      # SQLAlchemy async engine + session factory
 │   ├── models.py        # ORM models: User, RefreshToken, SsoConfig, Run, Control, Waiver, RiskAcceptance,
@@ -23,14 +25,14 @@ wafpass-server/
 │   │       ├── base.py           # AuthProvider protocol + UserRecord dataclass
 │   │       └── local.py          # bcrypt password verify
 │   └── routers/
-│       ├── auth.py          # POST/GET /auth/login, /refresh, /logout, /me, /users, /api-keys
-│       ├── sso.py           # GET/PUT/DELETE /sso/config, OIDC + SAML2 login flows
-│       ├── runs.py          # POST/GET /runs (auth-gated); triggers achievement evaluation on ingest
-│       ├── controls.py      # CRUD /controls (auth-gated)
-│       ├── waivers.py       # PUT/GET/DELETE /waivers (auth-gated)
-│       ├── risks.py         # PUT/GET/DELETE /risks (auth-gated)
-│       ├── sandbox.py       # POST /sandbox, GET /sandbox/status (auth-gated)
-│       ├── scan.py          # POST /scan, GET /scan/status (auth-gated)
+│       ├── auth.py          # POST/GET /api/v1/auth/login, /refresh, /logout, /me, /users, /api-keys
+│       ├── sso.py           # GET/PUT/DELETE /api/v1/sso/config, OIDC + SAML2 login flows
+│       ├── runs.py          # POST/GET /api/v1/runs (auth-gated); triggers achievement evaluation on ingest
+│       ├── controls.py      # CRUD /api/v1/controls (auth-gated)
+│       ├── waivers.py       # PUT/GET/DELETE /api/v1/waivers (auth-gated)
+│       ├── risks.py         # PUT/GET/DELETE /api/v1/risks (auth-gated)
+│       ├── sandbox.py       # POST /api/v1/sandbox, GET /api/v1/sandbox/status (auth-gated)
+│       ├── scan.py          # POST /api/v1/scan, GET /api/v1/scan/status (auth-gated)
 │       ├── evidence.py      # Evidence Locker — locked audit packages with QR codes and public tokens
 │       ├── achievements.py  # Maturity tier milestones + public verification page
 │       ├── leaderboard.py   # Hall of Fame — top sovereign + most improved rankings
@@ -139,7 +141,7 @@ Several large columns (`findings`, `controls_meta`, `secret_findings`, `plan_cha
 **Local login:**
 ```
 Browser / CLI
-    │  POST /auth/login {username, password}
+    │  POST /api/v1/auth/login {username, password}
     ▼
 auth/providers/local.py  ─── bcrypt verify ──▶  users table
     │  success: issue tokens
@@ -235,7 +237,7 @@ In non-local environments (`WAFPASS_ENV != local`) the server refuses to start u
 
 ### Machine-to-machine (CI/CD)
 
-`require_ingest` on `POST /runs` and `POST /scan` accepts **either** a valid Bearer JWT **or** the `X-Api-Key` header matching `WAFPASS_API_KEY`. This lets `wafpass check --push` work from CI pipelines without a user account.
+`require_ingest` on `POST /api/v1/runs` and `POST /api/v1/scan` accepts **either** a valid Bearer JWT **or** the `X-Api-Key` header matching `WAFPASS_API_KEY`. This lets `wafpass check --push` work from CI pipelines without a user account.
 
 ### Provider abstraction
 
@@ -359,7 +361,7 @@ risk_acceptances
 
 ### Evidence
 
-Immutable, locked audit package. The `snapshot` JSONB column is written once and never mutated. The SHA-256 hash of the canonical snapshot (`json.dumps(snapshot, sort_keys=True)`) is stored in `hash_digest` and serves as the integrity proof handed to auditors. `public_token` is a 32-character URL-safe random string that lets unauthenticated viewers access the evidence report (`/evidence/p/{token}`) and QR code without a login.
+Immutable, locked audit package. The `snapshot` JSONB column is written once and never mutated. The SHA-256 hash of the canonical snapshot (`json.dumps(snapshot, sort_keys=True)`) is stored in `hash_digest` and serves as the integrity proof handed to auditors. `public_token` is a 32-character URL-safe random string that lets unauthenticated viewers access the evidence report (`/api/v1/evidence/p/{token}`) and QR code without a login.
 
 ```
 evidence
@@ -409,7 +411,7 @@ project_passports
 
 ### ProjectAchievement
 
-Maturity tier milestone records. One row per `(project, tier_level)` pair — a project can hold at most one achievement per tier (lower tiers are never revoked when a higher tier is reached). `verification_token` is a 44-character URL-safe random string that serves as the publicly-shareable proof of achievement at `/public/achievements/{token}`.
+Maturity tier milestone records. One row per `(project, tier_level)` pair — a project can hold at most one achievement per tier (lower tiers are never revoked when a higher tier is reached). `verification_token` is a 44-character URL-safe random string that serves as the publicly-shareable proof of achievement at `/api/v1/public/achievements/{token}`.
 
 ```
 project_achievements
@@ -424,7 +426,7 @@ project_achievements
 └── achieved_at         TIMESTAMPTZ  server_default=now()
 ```
 
-**Achievement evaluation flow:** `POST /runs` calls `evaluate_and_record_achievements(db, run)` after persisting the run. The function checks which tier thresholds the run's score qualifies for and creates `ProjectAchievement` rows only for tiers the project has not previously held.
+**Achievement evaluation flow:** `POST /api/v1/runs` calls `evaluate_and_record_achievements(db, run)` after persisting the run. The function checks which tier thresholds the run's score qualifies for and creates `ProjectAchievement` rows only for tiers the project has not previously held.
 
 ### Widget
 
@@ -446,7 +448,7 @@ widgets
 **Widget token flow:**
 ```
 Admin/Engineer
-    │  POST /widgets {name, config}
+    │  POST /api/v1/widgets {name, config}
     ▼
 Server generates 32-char URL-safe token
     ▼
@@ -454,7 +456,7 @@ Widget created with token → response includes token
     │
     ▼
 Dashboard/Display
-    │  GET /widget/p/{token}.json
+    │  GET /api/v1/widget/p/{token}.json
     ▼
 Token verified, last_accessed_at updated
     ▼

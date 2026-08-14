@@ -201,7 +201,7 @@ class ProjectPassportOut(ProjectPassportUpsert):
 
 
 class RunCreate(BaseModel):
-    """Payload accepted by POST /runs — matches wafpass-result.json schema."""
+    """Payload accepted by POST /api/v1/runs — matches wafpass-result.json schema."""
     schema_version: str = "1.1"
     project: str = ""
     branch: str = ""
@@ -417,7 +417,7 @@ class WidgetOut(BaseModel):
 
 
 class ControlIn(WizardControl):
-    """Request body for POST /controls.
+    """Request body for POST /api/v1/controls.
 
     Extends WizardControl (from wafpass-core) with an optional ``source``
     field indicating the authoring origin.
