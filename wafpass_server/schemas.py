@@ -294,6 +294,93 @@ class AchievementOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# ── Validation schemas ──────────────────────────────────────────────────────────
+
+
+class ValidationSubmit(BaseModel):
+    """Payload accepted by POST /api/v1/validations."""
+
+    result: dict[str, Any] = Field(description="The WafpassResultSchema JSON object.")
+    attestation: dict[str, Any] = Field(description="The LocalAttestationSchema JSON object.")
+
+
+class InternalValidationSubmit(BaseModel):
+    """Payload accepted by the gateway-only internal signing endpoint."""
+
+    result: dict[str, Any] = Field(description="The WafpassResultSchema JSON object.")
+    attestation: dict[str, Any] = Field(description="The LocalAttestationSchema JSON object.")
+    gateway_request_id: str | None = None
+    validated_at: str | None = None
+    expires_at: str | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class ValidationRecord(BaseModel):
+    """Full validation record returned by GET /api/v1/validations/{id}."""
+
+    validation_id: str
+    canonical_hash: str
+    project: str
+    branch: str
+    git_sha: str
+    status: str
+    validated_at: datetime
+    server_public_key: str
+    server_signature: str
+    certificate_chain: list[str]
+    badge_url: str
+    verification_url: str
+    expires_at: datetime | None = None
+    metadata: dict[str, Any] | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ValidationVerify(BaseModel):
+    """Public verification response returned by GET /api/v1/validations/{id}/verify."""
+
+    validation_id: str
+    canonical_hash: str
+    status: str
+    validated_at: datetime
+    server_public_key: str
+    server_signature: str
+    certificate_chain: list[str]
+    expires_at: datetime | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class ValidationBadge(BaseModel):
+    """Portable badge JSON for a validation record."""
+
+    schema_version: str = "1.0"
+    kind: str = "wafpass-official-validation"
+    status: str
+    run_hash: str
+    score: int | None = None
+    project: str
+    branch: str
+    git_sha: str
+    validation_id: str
+    validated_at: datetime
+    badge_url: str
+    verification_url: str
+    signer_public_key: str
+    metadata: dict[str, Any] | None = None
+
+
+class LocalAttestationOut(BaseModel):
+    """Server-signed local attestation returned to dashboard/CLI."""
+
+    public_key: str
+    signature: str
+    algorithm: str
+    canonical_hash: str
+    signed_at: str
+    signer_kind: str
+    run: dict[str, Any] = Field(default_factory=dict, description="The exact run snapshot that was signed.")
+
+
 # ── Compliance audit event schemas ───────────────────────────────────────────
 
 
@@ -523,3 +610,5 @@ class UserGroupCreate(BaseModel):
     user_id: uuid.UUID
     group_name: str = Field(min_length=1, max_length=200)
     provider: str = "*"
+
+

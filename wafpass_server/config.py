@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     # Empty = disabled.  Set X-Api-Key header to this value on POST /api/v1/runs / POST /api/v1/scan.
     wafpass_api_key: str = ""
 
+    # Pre-shared key for the validation gateway to call the internal signing
+    # endpoint. Empty = disabled. Keep secret and rotate regularly.
+    wafpass_internal_api_key: str = ""
+
     # Public base URL used to build absolute links in QR codes and audit reports.
     # Set this to the externally reachable address of the server, e.g.
     # https://wafpass.example.com  (no trailing slash).
@@ -58,6 +62,18 @@ class Settings(BaseSettings):
     # Legacy: used by the update checker to locate a local framework clone.
     # Defaults to /app for containerized deployments.
     wafpass_base_path: str = "/app"
+
+    # ── Validation authority keys ─────────────────────────────────────────────
+    # Directory containing root.key, root.crt, server.key, server.crt.
+    # If files are missing they are generated once (dev/local only).
+    # In production mount PEM files from a KMS/secret store.
+    wafpass_validation_keys_dir: str = ""
+
+    # Path to the gateway-issued server sub-CA certificate. When set, this
+    # certificate is served by GET /api/v1/validations/server.crt and included
+    # by the dashboard/CLI in validation submissions to the gateway. If empty,
+    # the legacy server.crt in wafpass_validation_keys_dir is used.
+    wafpass_server_subca_cert: str = ""
 
     # Public Git URL for the WAF++ framework repository.
     # The update checker fetches version and commit information from this repo.
