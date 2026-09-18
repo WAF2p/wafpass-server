@@ -396,6 +396,38 @@ class Notification(Base):
     target_role: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)  # admin, clevel, architect, engineer, all
 
 
+class Validation(Base):
+    """Official server countersignature record for a WAF++ PASS run.
+
+    Each row is immutable once created; revocation only flips the status
+    and records a revocation timestamp without altering the signed payload.
+    """
+    __tablename__ = "validations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    validation_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False, default=lambda: str(uuid.uuid4()))
+    canonical_hash: Mapped[str] = mapped_column(Text, nullable=False, index=True)
+    project: Mapped[str] = mapped_column(Text, default="")
+    branch: Mapped[str] = mapped_column(Text, default="")
+    git_sha: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")  # active | revoked
+    run_snapshot: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    server_public_key: Mapped[str] = mapped_column(Text, nullable=False)
+    server_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    certificate_chain: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    badge_url: Mapped[str] = mapped_column(Text, default="")
+    verification_url: Mapped[str] = mapped_column(Text, default="")
+    local_public_key: Mapped[str] = mapped_column(Text, default="")
+    local_signature: Mapped[str] = mapped_column(Text, default="")
+    local_signed_at: Mapped[str] = mapped_column(Text, default="")
+    local_signer_kind: Mapped[str] = mapped_column(Text, default="")
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    validation_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class Run(Base):
     __tablename__ = "runs"
 

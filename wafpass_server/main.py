@@ -5,13 +5,17 @@ import asyncio
 import logging
 import os
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.config import settings
+from wafpass_server.database import get_db
+from wafpass_server.models import Validation
 from wafpass_server.routers.auth import router as auth_router
 from wafpass_server.routers.controls import router as controls_router
 from wafpass_server.routers.control_packs import router as control_packs_router
@@ -33,6 +37,8 @@ from wafpass_server.routers.widgets import router as widgets_router
 from wafpass_server.routers.notifications import router as notifications_router
 from wafpass_server.routers.update_checker import router as update_router
 from wafpass_server.routers.auto_fix import router as auto_fix_router
+from wafpass_server.routers.validations import router as validations_router
+from wafpass_server.validation_service import ValidationService, load_validation_service
 
 # Framework update info path - configurable via environment variable
 _FRAMEWORK_UPDATE_INFO_PATH = os.environ.get(
@@ -64,12 +70,23 @@ app = FastAPI(
         {"name": "audit", "description": "Server-side compliance audit log — waiver, risk, scan, and finding events."},
         {"name": "findings-comments", "description": "Team collaboration on findings — comments, notifications, and remediation tracking."},
         {"name": "widgets", "description": "Widget management — create dashboards for compliance data display on computers, TVs, or web pages."},
+        {"name": "validations", "description": "Official cryptographic validation of WAF++ PASS runs — certificate chain and badges."},
     ],
+)
+
+# In local development, allow any localhost/private-network origin so the Vite
+# dev server (or a dashboard served from any local port/host) can call the API
+# without manually maintaining CORS_ORIGINS. Production keeps the strict list.
+_LOCAL_ORIGIN_REGEX = (
+    r"https?://([a-zA-Z0-9.-]+|localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?$"
+    if settings.wafpass_env == "local"
+    else None
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=_LOCAL_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -97,6 +114,69 @@ app.include_router(widgets_router, prefix="/api/v1")
 app.include_router(notifications_router, prefix="/api/v1")
 app.include_router(update_router, prefix="/api/v1")
 app.include_router(auto_fix_router, prefix="/api/v1")
+
+
+# Module-level validation service singleton for public trust endpoints.
+_validation_service: ValidationService | None = None
+
+
+def _get_validation_service() -> ValidationService:
+    global _validation_service
+    if _validation_service is None:
+        keys_dir = settings.wafpass_validation_keys_dir or None
+        subca_cert_path = settings.wafpass_server_subca_cert or None
+        _validation_service = load_validation_service(
+            keys_dir=keys_dir,
+            subca_cert_path=subca_cert_path,
+        )
+    return _validation_service
+
+
+@app.get("/api/v1/validations/root.crt", tags=["validations"])
+async def get_root_certificate() -> Response:
+    """Publish the WAF++ root CA certificate (public trust anchor)."""
+    service = _get_validation_service()
+    return Response(
+        content=service.root_cert_pem,
+        media_type="application/x-pem-file",
+        headers={"Content-Disposition": 'attachment; filename="wafpass-root.crt"'},
+    )
+
+
+@app.get("/api/v1/validations/server.crt", tags=["validations"])
+async def get_server_certificate() -> Response:
+    """Publish this wafpass-server's gateway-issued sub-CA certificate.
+
+    The dashboard and CLI include this certificate when submitting validation
+    runs to the central WAF++ gateway so the gateway can verify the server's
+    identity against its registered certificate registry.
+    """
+    service = _get_validation_service()
+    cert_pem = service.server_subca_certificate_pem
+    return Response(
+        content=cert_pem,
+        media_type="application/x-pem-file",
+        headers={"Content-Disposition": 'attachment; filename="wafpass-server.crt"'},
+    )
+
+
+@app.get("/api/v1/revocations", tags=["validations"])
+async def get_revocation_list(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return a signed list of all revoked validation IDs (public).
+
+    The list is signed by the WAF++ server intermediate key so verifiers can
+    check it offline against the published root certificate.
+    """
+    result = await db.execute(select(Validation.validation_id).where(Validation.status == "revoked"))
+    revoked_ids = sorted(row[0] for row in result.all())
+
+    service = _get_validation_service()
+    return service.sign_revocation_list(revoked_validation_ids=revoked_ids)
+
+
+app.include_router(validations_router, prefix="/api/v1")
 
 
 @app.get("/framework-update-info.yml", tags=["updates"])

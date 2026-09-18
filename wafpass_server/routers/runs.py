@@ -32,9 +32,28 @@ from wafpass_server.models import (
     UserGroup,
 )
 from wafpass_server.routers.achievements import evaluate_and_record_achievements
-from wafpass_server.schemas import ControlMetaSchema, Envelope, FindingSchema, Meta, RunCreate, RunDetail, RunSummary, SecretFindingSchema
+from wafpass_server.schemas import ControlMetaSchema, Envelope, FindingSchema, LocalAttestationOut, Meta, RunCreate, RunDetail, RunSummary, SecretFindingSchema
+from wafpass_server.validation_service import ValidationService, load_validation_service
 
 router = APIRouter(prefix="/runs", tags=["runs"])
+
+# Module-level singleton, created lazily on first request so the app can start
+# even if key files are mounted later.
+_validation_service: ValidationService | None = None
+
+
+def _get_validation_service() -> ValidationService:
+    global _validation_service
+    if _validation_service is None:
+        from wafpass_server.config import settings
+        keys_dir = settings.wafpass_validation_keys_dir or None
+        subca_cert_path = settings.wafpass_server_subca_cert or None
+        _validation_service = load_validation_service(
+            keys_dir=keys_dir,
+            subca_cert_path=subca_cert_path,
+        )
+    return _validation_service
+
 
 # Valid pillar values (matching the schema and dashboard)
 _VALID_PILLARS = ["security", "cost", "operations", "performance", "reliability", "sovereign", "sustainability", "agentic"]
@@ -464,6 +483,32 @@ async def get_run(
     )
 
 
+def _run_to_wafpass_result(run: Run) -> dict[str, Any]:
+    """Build a WafpassResultSchema-compatible dict from a stored Run row."""
+    return {
+        "schema_version": "1.1",
+        "project": run.project,
+        "branch": run.branch,
+        "git_sha": run.git_sha,
+        "triggered_by": run.triggered_by,
+        "run": run.run_metadata or {},
+        "iac_framework": run.iac_framework,
+        "stage": run.stage,
+        "score": run.score,
+        "pillar_scores": run.pillar_scores or {},
+        "path": run.path,
+        "controls_loaded": run.controls_loaded,
+        "controls_run": run.controls_run,
+        "detected_regions": run.detected_regions or [],
+        "source_paths": run.source_paths or [],
+        "controls_meta": run.controls_meta or [],
+        "findings": run.findings or [],
+        "secret_findings": run.secret_findings or [],
+        "plan_changes": run.plan_changes,
+        "source_snapshot": run.source_snapshot or {},
+    }
+
+
 async def _check_run_access(
     run_id: uuid.UUID,
     db: AsyncSession,
@@ -479,6 +524,51 @@ async def _check_run_access(
         await require_group_access(run.project, db, user)
 
     return run
+
+
+@router.post("/{run_id}/attestation", response_model=Envelope[LocalAttestationOut])
+async def create_run_attestation(
+    request: Request,
+    run_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    user: Annotated[User, Depends(require_role("clevel"))],
+) -> Envelope[LocalAttestationOut]:
+    """Sign a stored run with the server's Ed25519 key and return the attestation.
+
+    The dashboard forwards the returned local attestation together with the
+    server's sub-CA certificate to the central WAF++ validation gateway to
+    request an official countersignature.
+    """
+    run = await _check_run_access(run_id, db, user)
+    result_dict = _run_to_wafpass_result(run)
+
+    service = _get_validation_service()
+    attestation = service.sign_local_attestation(result_dict, signer_kind="server")
+
+    # Audit log
+    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
+    db.add(UserAuditLog(
+        actor_id=user.id,
+        action="run.attestation.created",
+        detail={
+            "run_id": str(run_id),
+            "project": run.project,
+            "branch": run.branch,
+            "canonical_hash": attestation.canonical_hash,
+        },
+        ip=client_ip,
+    ))
+    await db.commit()
+
+    return Envelope(data=LocalAttestationOut(
+        public_key=attestation.public_key,
+        signature=attestation.signature,
+        algorithm=attestation.algorithm,
+        canonical_hash=attestation.canonical_hash,
+        signed_at=attestation.signed_at,
+        signer_kind=attestation.signer_kind,
+        run=result_dict,
+    ))
 
 
 @router.get("/{run_id}/controls", response_model=Envelope[list[ControlMetaSchema]])
