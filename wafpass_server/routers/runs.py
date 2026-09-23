@@ -113,18 +113,13 @@ def _finding_rows(run_id: uuid.UUID, findings: list[FindingSchema]) -> list[RunF
     ]
 
 
-@router.post("", response_model=Envelope[RunSummary], status_code=201)
-async def create_run(
-    request: Request,
+async def _persist_run(
+    db: AsyncSession,
     payload: RunCreate,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    auth: Annotated[IngestAuth, Depends(require_ingest)],
-) -> Envelope[RunSummary]:
-    """Ingest a wafpass-result.json payload.
-
-    Accepts either a Bearer JWT (any role) or the ``X-Api-Key`` header so that
-    CI/CD pipelines can push results without a user account.
-    """
+    auth: IngestAuth,
+    request: Request | None = None,
+) -> RunSummary:
+    """Persist a parsed RunCreate payload and return its RunSummary."""
     # Log incoming findings for debugging
     logger.info("=== RUN PUSH DEBUG ===")
     logger.info("Project: %s", payload.project)
@@ -220,7 +215,9 @@ async def create_run(
 
     await evaluate_and_record_achievements(db, run)
 
-    client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
+    client_ip = ""
+    if request is not None:
+        client_ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
 
     if auth.api_key_id is not None:
         # DB-tracked API key path
@@ -250,7 +247,23 @@ async def create_run(
         ))
         await db.commit()
 
-    return Envelope(data=RunSummary.from_orm(run))
+    return RunSummary.from_orm(run)
+
+
+@router.post("", response_model=Envelope[RunSummary], status_code=201)
+async def create_run(
+    request: Request,
+    payload: RunCreate,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    auth: Annotated[IngestAuth, Depends(require_ingest)],
+) -> Envelope[RunSummary]:
+    """Ingest a wafpass-result.json payload.
+
+    Accepts either a Bearer JWT (any role) or the ``X-Api-Key`` header so that
+    CI/CD pipelines can push results without a user account.
+    """
+    summary = await _persist_run(db, payload, auth, request)
+    return Envelope(data=summary)
 
 
 async def _filter_runs_by_group_access(

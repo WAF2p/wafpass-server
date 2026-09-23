@@ -6,6 +6,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_JWT_SECRET = "change-me-in-production-wafpass-secret-key"
 
+# Sentinel values that are unsafe for any real deployment.
+_DISALLOWED_JWT_SECRETS = frozenset({
+    _DEFAULT_JWT_SECRET,
+    "change-me-in-production",
+    "",
+})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -102,15 +109,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _require_non_default_secrets_in_production(self) -> "Settings":
-        if self.wafpass_env == "local":
-            return self
-        if self.wafpass_jwt_secret == _DEFAULT_JWT_SECRET:
+        if self.wafpass_jwt_secret in _DISALLOWED_JWT_SECRETS:
             raise ValueError(
-                "WAFPASS_JWT_SECRET must be changed from the default value. "
+                "WAFPASS_JWT_SECRET must be set to a strong random value. "
+                "The default / placeholder value is not allowed in any environment. "
                 "Generate a random 32-byte secret and set it via the WAFPASS_JWT_SECRET "
-                "environment variable before starting in a non-local environment."
+                "environment variable. If you are running locally, use 'wafpass init --mode dashboard' "
+                "to generate a valid .env file."
             )
-        if not self.wafpass_encryption_key:
+        if self.wafpass_env != "local" and not self.wafpass_encryption_key:
             raise ValueError(
                 "WAFPASS_ENCRYPTION_KEY must be set in non-local environments. "
                 "Without it, SSO secrets are derived from WAFPASS_JWT_SECRET, "
