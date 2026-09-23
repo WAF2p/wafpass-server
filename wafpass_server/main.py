@@ -83,6 +83,14 @@ _LOCAL_ORIGIN_REGEX = (
     else None
 )
 
+# Local development: allow any localhost/cloud.waf2p origin regardless of port,
+# so the dashboard works whether served through docker host networking, a custom
+# DNS entry in /etc/hosts, or a Vite dev server on any port.
+_cors_origins = settings.cors_origins_list
+_cors_origin_regex = None
+if settings.wafpass_env == "local":
+    _cors_origin_regex = r"^http://(localhost|cloud\.waf2p)(:\d+)?$"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -236,9 +244,32 @@ async def _hourly_update_checker() -> None:
         await asyncio.sleep(3600)
 
 
+def _validate_startup_config() -> None:
+    """Fail fast if required secrets are missing or still placeholders."""
+    import sys
+
+    logger = logging.getLogger("wafpass_server")
+    try:
+        # Force the Pydantic model to validate; this catches placeholder JWT secrets.
+        settings.model_validate(settings.model_dump())
+    except ValueError as exc:
+        logger.error("Invalid server configuration: %s", exc)
+        sys.exit(1)
+
+    required = ["WAFPASS_JWT_SECRET"]
+    missing = [k for k in required if not getattr(settings, k.lower(), None)]
+    if missing:
+        logger.error(
+            "Missing required environment variables: %s. "
+            "Run 'wafpass init --mode dashboard' to generate a valid .env file.",
+            ", ".join(missing),
+        )
+        sys.exit(1)
+
+
 @app.on_event("startup")
 async def _configure_logging_and_seed_admin() -> None:
-    """Configure logging and create the bootstrap admin user if no users exist."""
+    """Configure logging, validate config, and create the bootstrap admin user if no users exist."""
     global _update_checker_task
 
     # Configure logging to show DEBUG level messages
@@ -249,6 +280,9 @@ async def _configure_logging_and_seed_admin() -> None:
     )
     logger = logging.getLogger("wafpass_server")
     logger.info("=== WAF++ Server starting ===")
+
+    # Validate configuration before attempting database connections.
+    _validate_startup_config()
 
     # Generate initial update info on startup (always run, regardless of seeding)
     logger.info("Generating initial framework update info...")
