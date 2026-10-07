@@ -25,6 +25,9 @@ RUN pip install --no-cache-dir ".[qr]" && chmod +x entrypoint.sh
 # controls/ subdirectory is data (not Python code) and is not installed by pip.
 COPY pass/controls/ /app/controls/
 
+# Copy WAF++ regulatory logo assets so the PDF reporter can render framework badges.
+COPY pass/assets/ /app/assets/
+
 # Copy WAF++ framework repository for update checking
 COPY framework/ /app/framework/
 
@@ -34,6 +37,9 @@ ENV WAFPASS_CONTROLS_DIR=/app/controls
 
 # Framework path for update checking
 ENV WAFPASS_FRAMEWORK_DIR=/app/framework
+
+# Asset path used by the PDF reporter for regulatory logos
+ENV WAFPASS_ASSETS_DIR=/app/assets
 
 EXPOSE 8000
 

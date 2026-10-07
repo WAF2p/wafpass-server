@@ -222,6 +222,7 @@ class RunCreate(BaseModel):
     secret_findings: list[SecretFindingSchema] = Field(default_factory=list)
     plan_changes: dict[str, Any] | None = None
     source_snapshot: dict[str, str] = Field(default_factory=dict, description="Optional IaC source file contents uploaded by the CLI so the dashboard can render Local preview diffs. Keys are relative paths; values are file content strings.")
+    completed_at: datetime | None = None
 
 
 class RunSummary(BaseModel):
@@ -239,6 +240,7 @@ class RunSummary(BaseModel):
     controls_loaded: int
     controls_run: int
     created_at: datetime
+    completed_at: datetime | None = None
 
     @classmethod
     def from_orm(cls, obj: "Run") -> "RunSummary":
@@ -260,6 +262,7 @@ class RunSummary(BaseModel):
             controls_loaded=obj.controls_loaded,
             controls_run=obj.controls_run,
             created_at=obj.created_at,
+            completed_at=obj.completed_at,
         )
 
     model_config = {"from_attributes": True}
