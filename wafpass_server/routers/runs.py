@@ -178,6 +178,12 @@ async def _persist_run(
     await db.commit()
     await db.refresh(run)
 
+    # Record server-side completion timestamp after persistence so the dashboard
+    # can compute a positive scan duration (completed_at >= created_at).
+    run.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    await db.refresh(run)
+
     # Auto-create ProjectPassport if it doesn't exist
     existing_passport = await db.get(ProjectPassport, payload.project)
     if existing_passport is None:
