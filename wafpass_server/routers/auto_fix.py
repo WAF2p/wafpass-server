@@ -17,9 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("wafpass_server")
 
-from wafpass_server.auth.deps import require_role
+from wafpass_server.auth.deps import (
+    AuthContext,
+    bypasses_group_scoping,
+    get_auth_context,
+    get_scoped_db,
+    require_group_access,
+    require_role,
+)
 from wafpass_server.config import settings
-from wafpass_server.database import get_db
 from wafpass_server.models import Run, User
 
 router = APIRouter(prefix="/auto-fix", tags=["auto-fix"])
@@ -236,6 +242,7 @@ async def _build_diff_preview_from_snapshot(
     framework: str,
     db: AsyncSession,
     user: User,
+    auth: AuthContext,
 ) -> tuple[dict[str, list[str]], list[str], dict[str, str]]:
     """Generate unified diffs by applying a fix plan to a stored source snapshot.
 
@@ -256,10 +263,10 @@ async def _build_diff_preview_from_snapshot(
     if run is None:
         return {}, [f"Run {run_id} not found — cannot generate diffs from snapshot."], {}
 
-    # Enforce project-group access for non-admin users.
-    if user.role != "admin":
-        from wafpass_server.auth.deps import require_group_access
-        await require_group_access(run.project, db, user)
+    # Enforce project-group access, unless this request already has
+    # elevated (role="admin" or RLS-bypass) visibility.
+    if not bypasses_group_scoping(user, auth):
+        await require_group_access(run.project, db, user, auth)
 
     snapshot = run.source_snapshot or {}
     logger.info(
@@ -357,7 +364,8 @@ async def _build_diff_preview_from_snapshot(
 async def api_auto_fix_classify(
     req: AutoFixClassifyRequest,
     user: Annotated[User, Depends(require_role("clevel"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> dict[str, Any]:
     """Classify stored findings as fixable or manual and optionally render diffs.
 
@@ -410,7 +418,7 @@ async def api_auto_fix_classify(
     address_to_file: dict[str, str] = {}
     if req.run_id:
         diff_preview, snapshot_warnings, address_to_file = await _build_diff_preview_from_snapshot(
-            req.run_id, plan, req.iac.lower(), db, user
+            req.run_id, plan, req.iac.lower(), db, user, auth
         )
         warnings.extend(snapshot_warnings)
     else:

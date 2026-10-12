@@ -31,6 +31,12 @@ class User(Base):
     image_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    # Multi-mandant (Phase 0, ADR-003) — nullable and ignored while
+    # instance_settings["instance_mode"] == "single_tenant".
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
+    # None | "holding_admin" | "holding_viewer" | "group_admin" | "group_viewer"
+    # (the last two are Phase 6b / ADR-004 — see auth/deps.py's AuthContext)
+    holding_role: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
     finding_comments: Mapped[list["FindingComment"]] = relationship(
@@ -47,6 +53,59 @@ class User(Base):
     )
 
 
+class Mandant(Base):
+    """One company ("mandant") inside a multi-mandant holding deployment.
+
+    Rows exist from Phase 0 onward but are meaningless until an admin
+    activates multi-mandant mode (instance_settings["instance_mode"]).
+    See decisions/adrs/ADR-003-multi-mandant-tenancy.md.
+    """
+    __tablename__ = "mandants"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    logo_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    settings: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    # Phase 6a (ADR-003 addendum, .plan.md) — organizational/display metadata
+    # only. parent_id never affects RLS visibility; see that section's "no
+    # RLS policy changes" note. mandate_type is an app-validated enum
+    # ("holding" | "subsidiary" | "division"), not a DB CHECK constraint —
+    # same convention as holding_role/instance_mode elsewhere in this schema.
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mandants.id", ondelete="SET NULL"), nullable=True
+    )
+    mandate_type: Mapped[str] = mapped_column(Text, nullable=False, default="subsidiary")
+    jurisdiction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_tier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    data_residency: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Informational only — nothing reads this to change control enforcement.
+    # See .plan.md's Risks table: real per-mandate policy override would
+    # reverse ADR-003's "controls remain global" decision, not assumed here.
+    inherit_parent_policies: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class InstanceSetting(Base):
+    """Generic instance-wide key/value settings.
+
+    Seeded with key="instance_mode", value="single_tenant" at install time
+    (Phase 0). Flipped to "multi_mandant" exactly once by the one-way
+    activation endpoint (Phase 2) — the server must reject any attempt to
+    change it back.
+    """
+    __tablename__ = "instance_settings"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=_now)
+    changed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class UserAuditLog(Base):
     """One row per auditable action performed by (or on) a user account."""
     __tablename__ = "user_audit_logs"
@@ -58,6 +117,7 @@ class UserAuditLog(Base):
     detail: Mapped[dict] = mapped_column(JSONB, default=dict)     # action-specific context
     ip: Mapped[str] = mapped_column(Text, default="")
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class RefreshToken(Base):
@@ -118,6 +178,7 @@ class Waiver(Base):
     project: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class RiskAcceptance(Base):
@@ -138,6 +199,7 @@ class RiskAcceptance(Base):
     project: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class ApiKeyUsageLog(Base):
@@ -167,6 +229,7 @@ class ApiKey(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class GroupRoleMapping(Base):
@@ -189,10 +252,27 @@ class GroupRoleMapping(Base):
 
 
 class SsoConfig(Base):
-    """SSO provider configuration (one row per provider: 'oidc' or 'saml2')."""
+    """SSO provider configuration.
+
+    ADR-005: ``mandant_id`` is nullable. ``NULL`` is the instance-wide
+    default for ``provider`` ("oidc" | "saml2") — the only row shape that
+    existed before this ADR, and still the fallback when no override
+    exists. A set ``mandant_id`` is a per-mandant override, scoped to one
+    specific mandate. ``id`` stays a plain text primary key (same
+    app-enforced-convention style as ``instance_settings.key``): the
+    default row keeps its pre-ADR-005 id ("oidc"/"saml2"); an override
+    row's id is ``f"{provider}:{mandant_id}"`` — see
+    ``routers/sso.py``'s ``_cfg_row_id()``. Two partial unique indexes
+    (``ux_sso_configs_default``, ``ux_sso_configs_per_mandant`` —
+    migration 0048) enforce at most one row per provider per scope.
+    """
     __tablename__ = "sso_configs"
 
-    id: Mapped[str] = mapped_column(Text, primary_key=True)  # "oidc" | "saml2"
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)  # "oidc" | "saml2"
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("mandants.id", ondelete="CASCADE"), nullable=True
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     config: Mapped[dict] = mapped_column(JSONB, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
@@ -218,6 +298,7 @@ class Evidence(Base):
     public_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)  # unauthenticated access
     locked_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class ProjectPassport(Base):
@@ -241,6 +322,7 @@ class ProjectPassport(Base):
     updated_by: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class ProjectAchievement(Base):
@@ -256,6 +338,7 @@ class ProjectAchievement(Base):
     verification_token: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     snapshot_jsonb: Mapped[dict] = mapped_column(JSONB, default=dict)        # pillar_scores snapshot
     achieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class ComplianceAuditEvent(Base):
@@ -274,6 +357,7 @@ class ComplianceAuditEvent(Base):
     after: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class RunFinding(Base):
@@ -293,6 +377,7 @@ class RunFinding(Base):
     remediation: Mapped[str] = mapped_column(Text, default="")
     example: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     regulatory_mapping: Mapped[list] = mapped_column(JSONB, default=list)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class RunSecretFinding(Base):
@@ -308,6 +393,7 @@ class RunSecretFinding(Base):
     matched_key: Mapped[str] = mapped_column(Text, default="")
     masked_value: Mapped[str] = mapped_column(Text, default="")
     suppressed: Mapped[bool] = mapped_column(Boolean, default=False)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
     # Relationships
     run: Mapped["Run"] = relationship(
@@ -328,6 +414,7 @@ class FindingComment(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
     # Relationships - using explicit primaryjoin since FK is in this table
     run: Mapped["Run"] = relationship(
@@ -348,6 +435,7 @@ class SecretFindingComment(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
     # Relationships
     run: Mapped["Run"] = relationship(
@@ -380,6 +468,7 @@ class Widget(Base):
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class Notification(Base):
@@ -394,6 +483,7 @@ class Notification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     triggered_by: Mapped[str] = mapped_column(Text, nullable=False)
     target_role: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)  # admin, clevel, architect, engineer, all
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class Validation(Base):
@@ -426,6 +516,7 @@ class Validation(Base):
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     validation_metadata: Mapped[dict] = mapped_column("metadata", JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
 class Run(Base):
@@ -453,6 +544,7 @@ class Run(Base):
     source_snapshot: Mapped[dict] = mapped_column(JSONB, default=dict)  # relative IaC file path -> file content snapshot
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
     # Relationships
     findings_comments: Mapped[list["FindingComment"]] = relationship(
@@ -479,6 +571,7 @@ class ProjectGroup(Base):
     group_name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
     # Relationships
     created_by_user: Mapped["User | None"] = relationship(

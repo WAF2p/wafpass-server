@@ -316,6 +316,10 @@ class InternalValidationSubmit(BaseModel):
     validated_at: str | None = None
     expires_at: str | None = None
     metadata: dict[str, Any] | None = None
+    # Phase 4 — see LocalAttestationOut.mandant_id. None until both the
+    # dashboard and the external gateway forward it through; handled as a
+    # graceful degradation, not a hard requirement — see validations.py.
+    mandant_id: str | None = None
 
 
 class ValidationRecord(BaseModel):
@@ -382,6 +386,12 @@ class LocalAttestationOut(BaseModel):
     signed_at: str
     signer_kind: str
     run: dict[str, Any] = Field(default_factory=dict, description="The exact run snapshot that was signed.")
+    # Phase 4 — not part of the signed payload itself; carried as plain
+    # metadata so the dashboard -> gateway -> POST /internal/sign round
+    # trip can tag the resulting Validation with the right mandate without
+    # a lookup. Requires the dashboard AND the external validation gateway
+    # repo to forward it through — see .plan.md's Phase 4 findings.
+    mandant_id: str | None = None
 
 
 # ── Compliance audit event schemas ───────────────────────────────────────────
@@ -613,5 +623,50 @@ class UserGroupCreate(BaseModel):
     user_id: uuid.UUID
     group_name: str = Field(min_length=1, max_length=200)
     provider: str = "*"
+
+
+# ── Pipeline dashboards schemas ───────────────────────────────────────────────
+
+
+class ProjectRunSummary(BaseModel):
+    project: str
+    avgScore: int
+    latestScore: int
+    runCount: int
+    lastRunAt: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PipelineMetrics(BaseModel):
+    totalRuns: int
+    passRate: int
+    avgScore: int
+    projects: int
+    recentRuns: int
+    failedRuns: int
+    skippedRuns: int
+    projectsList: list[ProjectRunSummary]
+
+
+class RunsByDay(BaseModel):
+    day: str
+    count: int
+    passCount: int
+    failCount: int
+
+
+class DurationStats(BaseModel):
+    avg: int
+    min: int
+    max: int
+    avgLabel: str
+    minLabel: str
+    maxLabel: str
+
+
+class PipelineTrends(BaseModel):
+    runsByDay: list[RunsByDay]
+    durationStats: DurationStats
 
 

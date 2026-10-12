@@ -16,7 +16,17 @@ logger = logging.getLogger(__name__)
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import IngestAuth, get_current_user, require_group_access, require_ingest, require_role
+from wafpass_server.auth.deps import (
+    AuthContext,
+    IngestAuth,
+    bypasses_group_scoping,
+    get_auth_context,
+    get_current_user,
+    get_scoped_db,
+    require_group_access,
+    require_ingest,
+    require_role,
+)
 from wafpass_server.database import get_db
 from wafpass_server.models import (
     ApiKeyUsageLog,
@@ -80,7 +90,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
     return ts, uuid.UUID(id_str)
 
 
-def _finding_rows(run_id: uuid.UUID, findings: list[FindingSchema]) -> list[RunFinding]:
+def _finding_rows(run_id: uuid.UUID, findings: list[FindingSchema], mandant_id: uuid.UUID | None = None) -> list[RunFinding]:
     """Build RunFinding ORM rows from a list of FindingSchema objects."""
     # Log severities for debugging
     if findings:
@@ -108,6 +118,7 @@ def _finding_rows(run_id: uuid.UUID, findings: list[FindingSchema]) -> list[RunF
             remediation=f.remediation,
             example=f.example,
             regulatory_mapping=f.regulatory_mapping,
+            mandant_id=mandant_id,
         )
         for f in findings
     ]
@@ -173,6 +184,7 @@ async def _persist_run(
         secret_findings=[sf.model_dump() for sf in payload.secret_findings],
         plan_changes=payload.plan_changes,
         source_snapshot=payload.source_snapshot,
+        mandant_id=auth.mandant_id,
     )
     db.add(run)
     await db.commit()
@@ -184,10 +196,26 @@ async def _persist_run(
     await db.commit()
     await db.refresh(run)
 
-    # Auto-create ProjectPassport if it doesn't exist
-    existing_passport = await db.get(ProjectPassport, payload.project)
+    # Auto-create ProjectPassport if it doesn't exist.
+    # project_passports' real PK is now composite (mandant_id, project) —
+    # see .plan.md and migration 0046/activate_multi_mandant_ddl.py — so
+    # this lookup is explicitly mandate-scoped rather than a bare
+    # db.get(ProjectPassport, payload.project), which only filters on
+    # `project` and would (a) rely entirely on RLS to hide a different
+    # mandate's same-named row, invisibly, and (b) still be wrong for a
+    # non-narrowed holding_admin once two mandates legitimately share a
+    # project name, where db.get()'s implicit single-row assumption would
+    # raise MultipleResultsFound instead of picking either row.
+    existing_passport = (
+        await db.execute(
+            select(ProjectPassport).where(
+                ProjectPassport.project == payload.project,
+                ProjectPassport.mandant_id == auth.mandant_id,
+            )
+        )
+    ).scalar_one_or_none()
     if existing_passport is None:
-        passport = ProjectPassport(project=payload.project)
+        passport = ProjectPassport(project=payload.project, mandant_id=auth.mandant_id)
         db.add(passport)
         await db.commit()
         logger.info("Auto-created ProjectPassport for project: %s", payload.project)
@@ -216,7 +244,7 @@ async def _persist_run(
     logger.info("=== END STORED RUN DEBUG ===")
 
     if payload.findings:
-        db.add_all(_finding_rows(run.id, payload.findings))
+        db.add_all(_finding_rows(run.id, payload.findings, auth.mandant_id))
         await db.commit()
 
     await evaluate_and_record_achievements(db, run)
@@ -250,6 +278,7 @@ async def _persist_run(
                 "endpoint": "POST /runs",
             },
             ip=client_ip,
+            mandant_id=auth.mandant_id,
         ))
         await db.commit()
 
@@ -272,41 +301,11 @@ async def create_run(
     return Envelope(data=summary)
 
 
-async def _filter_runs_by_group_access(
-    db: AsyncSession,
-    user: User,
-    stmt,
-) -> list:
-    """Filter runs list by group access for non-admin users."""
-    if user.role == "admin":
-        return None  # No filtering needed
-
-    # Get all groups the user belongs to
-    result = await db.execute(
-        select(UserGroup.group_name).where(UserGroup.user_id == user.id)
-    )
-    user_groups = result.scalars().all()
-
-    if not user_groups:
-        return []  # User has no groups, cannot access any runs
-
-    # Get all projects the user has access to
-    result = await db.execute(
-        select(ProjectGroup.project).where(ProjectGroup.group_name.in_(user_groups))
-    )
-    accessible_projects = set(result.scalars().all())
-
-    # Filter the query
-    from sqlalchemy import or_
-    stmt = stmt.where(Run.project.in_(accessible_projects))
-
-    return stmt
-
-
 @router.get("", response_model=Envelope[list[RunSummary]])
 async def list_runs(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(get_current_user)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = Query(default=None),
     project: str | None = Query(default=None),
@@ -317,7 +316,8 @@ async def list_runs(
     Pass the ``cursor`` value from ``meta.next_cursor`` to retrieve the next
     page.  When ``meta.next_cursor`` is null there are no more pages.
 
-    Non-admin users can only see runs for projects they have group access to.
+    Non-admin users (and non-bypassing holding/group roles) can only see
+    runs for projects they have group access to.
     """
     from wafpass_server.models import ProjectGroup
 
@@ -329,8 +329,9 @@ async def list_runs(
     if stage:
         stmt = stmt.where(Run.stage == stage)
 
-    # Filter by group access for non-admins
-    if user.role != "admin":
+    # Filter by group access, unless this request already has elevated
+    # (role="admin" or RLS-bypass) visibility — see bypasses_group_scoping.
+    if not bypasses_group_scoping(user, auth):
         # Get all groups the user belongs to
         result = await db.execute(
             select(UserGroup.group_name).where(UserGroup.user_id == user.id)
@@ -380,16 +381,17 @@ async def list_runs(
 @router.get("/{run_id}", response_model=Envelope[RunDetail])
 async def get_run(
     run_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(get_current_user)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[RunDetail]:
     run = await db.get(Run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # Check group-based access (admins bypass this check)
-    if user.role != "admin":
-        await require_group_access(run.project, db, user)
+    # Check group-based access (admins and RLS-bypass roles skip this check)
+    if not bypasses_group_scoping(user, auth):
+        await require_group_access(run.project, db, user, auth)
 
     # Fetch findings from run_findings table (normalized, with IDs)
     stmt = select(RunFinding).where(RunFinding.run_id == run_id)
@@ -532,15 +534,16 @@ async def _check_run_access(
     run_id: uuid.UUID,
     db: AsyncSession,
     user: User,
+    auth: AuthContext,
 ) -> Run:
     """Check that user has access to the run, and return the run."""
     run = await db.get(Run, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # Check group-based access (admins bypass this check)
-    if user.role != "admin":
-        await require_group_access(run.project, db, user)
+    # Check group-based access (admins and RLS-bypass roles skip this check)
+    if not bypasses_group_scoping(user, auth):
+        await require_group_access(run.project, db, user, auth)
 
     return run
 
@@ -549,8 +552,9 @@ async def _check_run_access(
 async def create_run_attestation(
     request: Request,
     run_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[LocalAttestationOut]:
     """Sign a stored run with the server's Ed25519 key and return the attestation.
 
@@ -558,7 +562,7 @@ async def create_run_attestation(
     server's sub-CA certificate to the central WAF++ validation gateway to
     request an official countersignature.
     """
-    run = await _check_run_access(run_id, db, user)
+    run = await _check_run_access(run_id, db, user, auth)
     result_dict = _run_to_wafpass_result(run)
 
     service = _get_validation_service()
@@ -576,6 +580,7 @@ async def create_run_attestation(
             "canonical_hash": attestation.canonical_hash,
         },
         ip=client_ip,
+        mandant_id=auth.mandant_id,
     ))
     await db.commit()
 
@@ -587,29 +592,32 @@ async def create_run_attestation(
         signed_at=attestation.signed_at,
         signer_kind=attestation.signer_kind,
         run=result_dict,
+        mandant_id=str(auth.mandant_id) if auth.mandant_id else None,
     ))
 
 
 @router.get("/{run_id}/controls", response_model=Envelope[list[ControlMetaSchema]])
 async def get_controls(
     run_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(get_current_user)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[list[dict]]:
-    run = await _check_run_access(run_id, db, user)
+    run = await _check_run_access(run_id, db, user, auth)
     return Envelope(data=run.controls_meta or [])
 
 
 @router.get("/{run_id}/findings", response_model=Envelope[list[FindingSchema]])
 async def get_findings(
     run_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(get_current_user)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
     severity: str | None = Query(default=None),
     pillar: str | None = Query(default=None),
     status: str | None = Query(default=None),
 ) -> Envelope[list[FindingSchema]]:
-    run = await _check_run_access(run_id, db, user)
+    run = await _check_run_access(run_id, db, user, auth)
 
     logger.info("=== GET FINDINGS DEBUG ===")
     logger.info("Run ID: %s", run_id)
@@ -688,12 +696,13 @@ def _build_sprint_controls(run: Run, sprint_ids: list[str]) -> list[dict]:
 @router.get("/{run_id}/export/csv", response_class=StreamingResponse)
 async def export_sprint_csv(
     run_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(get_current_user)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
     sprint: str = Query(..., description="Comma-separated list of control IDs in sprint"),
 ) -> StreamingResponse:
     """Export sprint controls as CSV for Excel."""
-    run = await _check_run_access(run_id, db, user)
+    run = await _check_run_access(run_id, db, user, auth)
 
     sprint_ids = [s.strip() for s in sprint.split(',') if s.strip()]
     controls = _build_sprint_controls(run, sprint_ids)
@@ -726,12 +735,13 @@ async def export_sprint_csv(
 async def export_sprint_jira(
     request: Request,
     run_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(get_current_user)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
     sprint: str = Query(..., description="Comma-separated list of control IDs in sprint"),
 ) -> StreamingResponse:
     """Export sprint controls as Jira issue bulk-create CSV."""
-    run = await _check_run_access(run_id, db, user)
+    run = await _check_run_access(run_id, db, user, auth)
 
     sprint_ids = [s.strip() for s in sprint.split(',') if s.strip()]
     controls = _build_sprint_controls(run, sprint_ids)
@@ -777,11 +787,12 @@ async def export_sprint_jira(
 async def export_sprint_slack(
     run_id: uuid.UUID,
     payload: dict[str, object],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(get_current_user)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> dict[str, str]:
     """Export sprint controls as Slack/MS Teams message payload."""
-    run = await _check_run_access(run_id, db, user)
+    run = await _check_run_access(run_id, db, user, auth)
 
     sprint = payload.get('sprint', '')
     sprint_ids = [s.strip() for s in str(sprint).split(',') if s.strip()]

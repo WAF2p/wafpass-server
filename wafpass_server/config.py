@@ -17,7 +17,18 @@ _DISALLOWED_JWT_SECRETS = frozenset({
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Owner/superuser role. Used only by Alembic migrations and the one-time
+    # multi-mandant activation DDL — never for ordinary request traffic.
+    # Postgres superusers always bypass row-level security, so routing
+    # ordinary queries through this role would make every RLS policy a
+    # silent no-op (see decisions/adrs/ADR-003-multi-mandant-tenancy.md).
     database_url: str = "postgresql+asyncpg://wafpass:wafpass@localhost:5432/wafpass"
+
+    # Least-privilege, non-superuser role for every ordinary request. This
+    # is what wafpass_server.database.get_db() actually connects with.
+    # Defaults to a local "wafpass_app" role — see db-init/02-wafpass-app-role.sql.
+    runtime_database_url: str = "postgresql+asyncpg://wafpass_app:wafpass_app@localhost:5432/wafpass"
+
     wafpass_env: str = "local"
 
     # CORS origins (comma-separated)
@@ -44,6 +55,13 @@ class Settings(BaseSettings):
     # Pre-shared API key for machine-to-machine access (CI/CD --push workflow).
     # Empty = disabled.  Set X-Api-Key header to this value on POST /api/v1/runs / POST /api/v1/scan.
     wafpass_api_key: str = ""
+
+    # Phase 4 — the legacy key above has no DB row and therefore no natural
+    # mandate. In multi-mandant mode it's rejected by default (fail closed,
+    # same philosophy as everywhere else in this plan); set this to a
+    # mandant's slug to explicitly map it to one mandate instead of
+    # migrating every CI/CD pipeline to a DB-stored per-mandate key at once.
+    wafpass_legacy_api_key_mandant_slug: str = ""
 
     # Pre-shared key for the validation gateway to call the internal signing
     # endpoint. Empty = disabled. Keep secret and rotate regularly.

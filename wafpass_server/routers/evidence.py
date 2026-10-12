@@ -12,16 +12,27 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import require_role
+from wafpass_server.auth.deps import AuthContext, get_auth_context, get_scoped_db, require_role
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import Evidence, Run, User
 from wafpass_server.schemas import Envelope
 
 router = APIRouter(tags=["evidence"])
+
+
+async def _set_public_lookup_token(db: AsyncSession, token: str) -> None:
+    """Let RLS find exactly the one evidence row matching this public token,
+    with zero other auth context — the same auth-bootstrap pattern as
+    users/api_keys, applied to an anonymous public lookup. See
+    db_migrations/activate_multi_mandant_ddl.py. No-op until Phase 2
+    activation; `db` here stays on plain get_db since there is no
+    AuthContext for an anonymous caller.
+    """
+    await db.execute(text("SELECT set_config('app.public_lookup_token', :v, true)"), {"v": token})
 
 # ── Optional QR code library ──────────────────────────────────────────────────
 
@@ -191,7 +202,8 @@ _PUBLIC_HTML_WRAPPER = """\
 async def create_evidence(
     payload: EvidenceCreate,
     acting_user: Annotated[User, Depends(require_role("engineer"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> EvidenceOut:
     """Lock a run's evidence. The snapshot is frozen and cannot be modified later."""
     try:
@@ -222,6 +234,7 @@ async def create_evidence(
         hash_digest=hash_digest,
         public_token=_generate_token(),
         locked_by=acting_user.id,
+        mandant_id=auth.mandant_id,
     )
     db.add(row)
     await db.commit()
@@ -232,7 +245,7 @@ async def create_evidence(
 @router.get("/evidence", response_model=Envelope[list[EvidenceOut]])
 async def list_evidence(
     _: Annotated[User, Depends(require_role("clevel"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     project: str | None = None,
     limit: int = 50,
     offset: int = 0,
@@ -248,7 +261,7 @@ async def list_evidence(
 async def get_evidence(
     evidence_id: str,
     _: Annotated[User, Depends(require_role("clevel"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
 ) -> Envelope[EvidenceOut]:
     result = await db.execute(select(Evidence).where(Evidence.id == evidence_id))
     row = result.scalar_one_or_none()
@@ -261,7 +274,7 @@ async def get_evidence(
 async def get_evidence_snapshot(
     evidence_id: str,
     _: Annotated[User, Depends(require_role("clevel"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
 ) -> dict:
     """Return the raw frozen snapshot for a locked evidence package."""
     result = await db.execute(select(Evidence).where(Evidence.id == evidence_id))
@@ -275,7 +288,7 @@ async def get_evidence_snapshot(
 async def get_evidence_report_html(
     evidence_id: str,
     _: Annotated[User, Depends(require_role("clevel"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
 ) -> HTMLResponse:
     """Download the locked HTML report for authenticated users."""
     result = await db.execute(select(Evidence).where(Evidence.id == evidence_id))
@@ -290,7 +303,7 @@ async def get_evidence_qr(
     evidence_id: str,
     request: Request,
     _: Annotated[User, Depends(require_role("clevel"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
 ) -> Response:
     """Return a QR code SVG linking to the public auditor URL for this evidence package."""
     result = await db.execute(select(Evidence).where(Evidence.id == evidence_id))
@@ -305,7 +318,7 @@ async def get_evidence_qr(
 async def delete_evidence(
     evidence_id: str,
     _: Annotated[User, Depends(require_role("admin"))],
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
 ) -> None:
     result = await db.execute(select(Evidence).where(Evidence.id == evidence_id))
     row = result.scalar_one_or_none()
@@ -322,6 +335,7 @@ async def public_evidence_view(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> HTMLResponse:
     """Public, unauthenticated view of a locked evidence package — for auditors."""
+    await _set_public_lookup_token(db, token)
     result = await db.execute(select(Evidence).where(Evidence.public_token == token))
     row = result.scalar_one_or_none()
     if row is None:
@@ -336,6 +350,7 @@ async def public_evidence_qr(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Return QR SVG for a public evidence token (no auth required — used in PDF embedding)."""
+    await _set_public_lookup_token(db, token)
     result = await db.execute(select(Evidence).where(Evidence.public_token == token))
     row = result.scalar_one_or_none()
     if row is None:
@@ -350,6 +365,7 @@ async def public_evidence_meta(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> EvidenceOut:
     """Return evidence metadata by public token (no auth — used by CLI)."""
+    await _set_public_lookup_token(db, token)
     result = await db.execute(select(Evidence).where(Evidence.public_token == token))
     row = result.scalar_one_or_none()
     if row is None:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from pydantic import BaseModel
 
@@ -14,9 +14,8 @@ import secrets
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import IngestAuth, require_role
+from wafpass_server.auth.deps import AuthContext, IngestAuth, get_auth_context, get_instance_mode, get_scoped_db, require_role
 from wafpass_server.config import settings
-from wafpass_server.database import get_db
 from wafpass_server.models import User
 from wafpass_server.routers.runs import _persist_run
 from wafpass_server.schemas import Envelope, RunCreate, RunSummary
@@ -343,8 +342,10 @@ async def run_sandbox(
 
 @router.post("/demo-run", response_model=Envelope[RunSummary], status_code=201)
 async def create_demo_run(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    request: Request,
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[RunSummary]:
     """Seed the dashboard with a one-click demo scan result.
 
@@ -352,6 +353,12 @@ async def create_demo_run(
     snippet and persists the result as a normal run so the empty-state dashboard
     immediately shows a populated report.
     """
+    if await get_instance_mode(db) == "multi_mandant" and auth.mandant_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail="X-Mandant-Context is required to tag a demo run with a mandate.",
+        )
+
     if not _check_wafpass():
         raise HTTPException(
             status_code=503,
@@ -421,7 +428,7 @@ async def create_demo_run(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     payload = RunCreate(**result.model_dump())
-    summary = await _persist_run(db, payload, IngestAuth(user=user), None)
+    summary = await _persist_run(db, payload, IngestAuth(user=user, mandant_id=auth.mandant_id), request)
     return Envelope(data=summary)
 
 

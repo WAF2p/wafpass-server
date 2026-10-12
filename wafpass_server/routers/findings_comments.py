@@ -9,9 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from wafpass_server.auth.deps import require_role
-from wafpass_server.database import get_db
-from wafpass_server.models import FindingComment, RunFinding, User
+from wafpass_server.auth.deps import AuthContext, get_auth_context, get_scoped_db, require_group_access, require_role
+from wafpass_server.models import FindingComment, Run, RunFinding, User
 from wafpass_server.schemas import Envelope, FindingCommentIn, FindingCommentOut
 
 router = APIRouter(prefix="/findings/{finding_id}/comments", tags=["findings-comments"])
@@ -20,13 +19,18 @@ router = APIRouter(prefix="/findings/{finding_id}/comments", tags=["findings-com
 @router.get("", response_model=Envelope[list[FindingCommentOut]])
 async def list_finding_comments(
     finding_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[list[FindingCommentOut]]:
     """List all comments on a finding."""
     finding = await db.get(RunFinding, finding_id)
     if finding is None:
         raise HTTPException(status_code=404, detail="Finding not found")
+
+    run = await db.get(Run, finding.run_id)
+    if run is not None:
+        await require_group_access(run.project, db, user, auth)
 
     stmt = (
         select(FindingComment)
@@ -65,19 +69,25 @@ async def list_finding_comments(
 async def create_finding_comment(
     finding_id: uuid.UUID,
     payload: FindingCommentIn,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     current_user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[FindingCommentOut]:
     """Create a comment on a finding."""
     finding = await db.get(RunFinding, finding_id)
     if finding is None:
         raise HTTPException(status_code=404, detail="Finding not found")
 
+    run = await db.get(Run, finding.run_id)
+    if run is not None:
+        await require_group_access(run.project, db, current_user, auth)
+
     comment = FindingComment(
         finding_id=finding_id,
         run_id=finding.run_id,
         user_id=current_user.id,
         message=payload.message,
+        mandant_id=auth.mandant_id,
     )
     db.add(comment)
     await db.commit()
@@ -103,8 +113,9 @@ async def create_finding_comment(
 async def delete_finding_comment(
     finding_id: uuid.UUID,
     comment_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     current_user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> None:
     """Delete a comment on a finding.
 
@@ -116,6 +127,10 @@ async def delete_finding_comment(
 
     if comment.finding_id != finding_id:
         raise HTTPException(status_code=404, detail="Comment does not belong to this finding")
+
+    run = await db.get(Run, comment.run_id)
+    if run is not None:
+        await require_group_access(run.project, db, current_user, auth)
 
     # Check ownership - only owners or admins can delete
     if comment.user_id != current_user.id and current_user.role not in ["clevel", "ciso"]:

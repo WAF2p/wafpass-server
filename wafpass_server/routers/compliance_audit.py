@@ -8,8 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import require_role
-from wafpass_server.database import get_db
+from wafpass_server.auth.deps import AuthContext, get_auth_context, get_scoped_db, require_role
 from wafpass_server.models import ComplianceAuditEvent, User
 from wafpass_server.schemas import ComplianceAuditEventIn, ComplianceAuditEventOut, Envelope
 
@@ -19,8 +18,9 @@ router = APIRouter(prefix="/audit/events", tags=["audit"])
 @router.post("", response_model=Envelope[ComplianceAuditEventOut], status_code=201)
 async def create_audit_event(
     payload: ComplianceAuditEventIn,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     current_user: Annotated[User, Depends(require_role("engineer"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[ComplianceAuditEventOut]:
     ts: datetime | None = None
     if payload.timestamp:
@@ -44,6 +44,7 @@ async def create_audit_event(
         before=payload.before,
         after=payload.after,
         created_by=current_user.id,
+        mandant_id=auth.mandant_id,
         **kwargs,
     )
     db.add(event)
@@ -54,7 +55,7 @@ async def create_audit_event(
 
 @router.get("", response_model=Envelope[list[ComplianceAuditEventOut]])
 async def list_audit_events(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     _: Annotated[User, Depends(require_role("ciso"))],
     limit: int = Query(default=500, le=2000),
     category: str | None = Query(default=None),
