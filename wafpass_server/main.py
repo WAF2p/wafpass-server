@@ -11,7 +11,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.security import HTTPBearer
 
-from wafpass_server.config import settings
+from wafpass_server.config import settings, validate_runtime_settings
 from wafpass_server.routers.auth import router as auth_router
 from wafpass_server.routers.controls import router as controls_router
 from wafpass_server.routers.control_packs import router as control_packs_router
@@ -160,6 +160,9 @@ async def _hourly_update_checker() -> None:
 async def _configure_logging_and_seed_admin() -> None:
     """Configure logging and create the bootstrap admin user if no users exist."""
     global _update_checker_task
+
+    # Validate secrets before serving traffic; tests/imports use permissive defaults.
+    validate_runtime_settings()
 
     # Configure logging to show DEBUG level messages
     logging.basicConfig(
