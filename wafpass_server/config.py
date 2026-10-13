@@ -1,6 +1,9 @@
 """Application configuration via environment variables."""
 from __future__ import annotations
 
+import os
+import secrets
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,6 +15,11 @@ _DISALLOWED_JWT_SECRETS = frozenset({
     "change-me-in-production",
     "",
 })
+
+
+def _generate_random_secret() -> str:
+    """Return a URL-safe random secret suitable for JWT signing."""
+    return secrets.token_urlsafe(32)
 
 
 class Settings(BaseSettings):
@@ -108,7 +116,8 @@ class Settings(BaseSettings):
     vault_transit_mount: str = "transit"
 
     @model_validator(mode="after")
-    def _require_non_default_secrets_in_production(self) -> "Settings":
+    def _validate_secrets(self) -> "Settings":
+        """Enforce strong secrets on every explicit Settings() construction."""
         if self.wafpass_jwt_secret in _DISALLOWED_JWT_SECRETS:
             raise ValueError(
                 "WAFPASS_JWT_SECRET must be set to a strong random value. "
@@ -131,14 +140,19 @@ class Settings(BaseSettings):
 
 
 def validate_runtime_settings() -> None:
-    """Validate secrets at application startup. Must be called from main.py."""
+    """Validate that the running server has production-grade secrets.
+
+    Called once during application startup. Import-time construction of the
+    global `settings` singleton is intentionally permissive for tests/CI.
+    """
     if settings.wafpass_env == "local":
         return
-    if settings.wafpass_jwt_secret == _DEFAULT_JWT_SECRET:
+    if settings.wafpass_jwt_secret in _DISALLOWED_JWT_SECRETS:
         raise ValueError(
-            "WAFPASS_JWT_SECRET must be changed from the default value. "
+            "WAFPASS_JWT_SECRET must be set to a strong random value. "
+            "The default / placeholder value is not allowed in any environment. "
             "Generate a random 32-byte secret and set it via the WAFPASS_JWT_SECRET "
-            "environment variable before starting in a non-local environment."
+            "environment variable."
         )
     if not settings.wafpass_encryption_key:
         raise ValueError(
@@ -148,4 +162,24 @@ def validate_runtime_settings() -> None:
         )
 
 
-settings = Settings()
+def _load_settings() -> Settings:
+    """Load settings safely for import-time use.
+
+    In local/test environments we auto-generate a random JWT secret if none is
+    configured, so that importing the package never raises during pytest
+    collection. Explicit Settings() construction still enforces strong secrets.
+    """
+    # When the environment explicitly requests a non-local profile, let pydantic
+    # run normally so misconfiguration surfaces immediately.
+    explicit_env = os.environ.get("WAFPASS_ENV", "local")
+    if explicit_env != "local":
+        return Settings()
+
+    # Local mode: if the secret is still the placeholder, use a generated value.
+    env_secret = os.environ.get("WAFPASS_JWT_SECRET", _DEFAULT_JWT_SECRET)
+    if env_secret in _DISALLOWED_JWT_SECRETS:
+        return Settings(wafpass_jwt_secret=_generate_random_secret(), wafpass_env="local")
+    return Settings()
+
+
+settings = _load_settings()
