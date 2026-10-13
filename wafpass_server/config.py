@@ -16,6 +16,11 @@ def _generate_random_secret() -> str:
     return secrets.token_urlsafe(32)
 
 
+def _generate_random_secret() -> str:
+    """Return a URL-safe random secret suitable for JWT signing."""
+    return secrets.token_urlsafe(32)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
