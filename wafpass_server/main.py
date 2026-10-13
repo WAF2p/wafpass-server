@@ -272,6 +272,9 @@ async def _configure_logging_and_seed_admin() -> None:
     """Configure logging, validate config, and create the bootstrap admin user if no users exist."""
     global _update_checker_task
 
+    # Validate secrets before serving traffic; tests/imports use permissive defaults.
+    validate_runtime_settings()
+
     # Configure logging to show DEBUG level messages
     logging.basicConfig(
         level=logging.INFO,

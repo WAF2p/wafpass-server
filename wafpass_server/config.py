@@ -130,4 +130,22 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
+def validate_runtime_settings() -> None:
+    """Validate secrets at application startup. Must be called from main.py."""
+    if settings.wafpass_env == "local":
+        return
+    if settings.wafpass_jwt_secret == _DEFAULT_JWT_SECRET:
+        raise ValueError(
+            "WAFPASS_JWT_SECRET must be changed from the default value. "
+            "Generate a random 32-byte secret and set it via the WAFPASS_JWT_SECRET "
+            "environment variable before starting in a non-local environment."
+        )
+    if not settings.wafpass_encryption_key:
+        raise ValueError(
+            "WAFPASS_ENCRYPTION_KEY must be set in non-local environments. "
+            "Without it, SSO secrets are derived from WAFPASS_JWT_SECRET, "
+            "which is insecure if that secret is ever rotated or leaked."
+        )
+
+
 settings = Settings()
