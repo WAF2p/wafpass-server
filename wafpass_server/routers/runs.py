@@ -30,6 +30,7 @@ from wafpass_server.auth.deps import (
 from wafpass_server.database import get_db
 from wafpass_server.models import (
     ApiKeyUsageLog,
+    Evidence,
     FindingComment,
     ProjectGroup,
     ProjectPassport,
@@ -42,7 +43,20 @@ from wafpass_server.models import (
     UserGroup,
 )
 from wafpass_server.routers.achievements import evaluate_and_record_achievements
-from wafpass_server.schemas import ControlMetaSchema, Envelope, FindingSchema, LocalAttestationOut, Meta, RunCreate, RunDetail, RunSummary, SecretFindingSchema
+from wafpass_server.schemas import (
+    ComplianceReadinessOut,
+    ControlMetaSchema,
+    Envelope,
+    FindingSchema,
+    FrameworkStats,
+    LocalAttestationOut,
+    Meta,
+    MissingRemediationControl,
+    RunCreate,
+    RunDetail,
+    RunSummary,
+    SecretFindingSchema,
+)
 from wafpass_server.validation_service import ValidationService, load_validation_service
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -644,6 +658,148 @@ async def get_findings(
             logger.info("  Return[%d]: check_id=%s, status=%s, resource=%s", i, f.check_id, f.status, f.resource)
     logger.info("=== END GET FINDINGS DEBUG ===")
     return Envelope(data=findings)
+
+
+# ── Compliance Readiness Endpoints ────────────────────────────────────────────
+
+
+_FW_DESCRIPTIONS: dict[str, str] = {
+    "GDPR": "General Data Protection Regulation (EU) 2016/679",
+    "ISO 27001": "Information Security Management Systems",
+    "ISO 27001:2022": "Information Security Management Systems",
+    "BSI C5": "Cloud Computing Compliance Criteria Catalogue",
+    "BSI C5:2020": "Cloud Computing Compliance Criteria Catalogue",
+    "BSI C3A": "Cloud Computing Security Requirements for Important Category (C3A)",
+    "BSI C3A:2026": "Cloud Computing Security Requirements for Important Category (C3A)",
+    "EUCS": "EU Cybersecurity Certification Scheme for Cloud",
+    "EUCS (ENISA)": "EU Cybersecurity Certification Scheme for Cloud",
+    "CSRD": "Corporate Sustainability Reporting Directive",
+    "SOC 2": "AICPA Service Organization Controls — Trust Services Criteria",
+    "SOC 2 Type II": "AICPA Service Organization Controls — Trust Services Criteria",
+    "PCI DSS v4.0": "Payment Card Industry Data Security Standard v4.0",
+    "CIS Controls v8": "Center for Internet Security Controls v8",
+    "COBIT 2019": "Control Objectives for Information and Related Technologies",
+    "NIS2": "Network and Information Security Directive (EU) 2022/2555",
+    "DORA": "Digital Operational Resilience Act (EU) 2022/2554",
+    "CSA STAR": "Cloud Security Alliance Security, Trust & Assurance Registry",
+    "IT-Grundschutz": "BSI IT-Grundschutz Compendium",
+}
+
+
+def _frameworks_for_control(control: dict) -> set[str]:
+    """Return the set of framework names a control is mapped to."""
+    mapping = control.get("regulatory_mapping") or []
+    return {m.get("framework") for m in mapping if m.get("framework")}
+
+
+def _control_has_remediation(control: dict) -> bool:
+    """True if at least one automated check has a non-empty remediation string."""
+    for check in control.get("checks") or []:
+        if (check.get("remediation") or "").strip():
+            return True
+    return False
+
+
+def _calculate_compliance_readiness(
+    controls_meta: list[dict],
+    evidence_frameworks: set[str],
+) -> ComplianceReadinessOut:
+    """Compute compliance readiness metrics from control metadata and collected evidence."""
+    controls = controls_meta or []
+    total_controls = len(controls)
+
+    # Framework coverage
+    controls_with_mapping = [c for c in controls if _frameworks_for_control(c)]
+    mapped_count = len(controls_with_mapping)
+    total_framework_coverage = round(mapped_count / total_controls * 100) if total_controls > 0 else 0
+
+    # Build per-framework stats: % of mapped-to-framework controls covered by evidence
+    framework_controls: dict[str, list[dict]] = {}
+    for c in controls:
+        for fw in _frameworks_for_control(c):
+            framework_controls.setdefault(fw, []).append(c)
+
+    frameworks: list[FrameworkStats] = []
+    for fw_name, fw_controls in framework_controls.items():
+        covered = sum(1 for c in fw_controls if evidence_frameworks & _frameworks_for_control(c))
+        pct = round(covered / len(fw_controls) * 100) if fw_controls else 0
+        frameworks.append(
+            FrameworkStats(
+                name=fw_name,
+                description=_FW_DESCRIPTIONS.get(fw_name, ""),
+                controls=len(fw_controls),
+                pct=pct,
+            )
+        )
+    frameworks.sort(key=lambda x: x.pct, reverse=True)
+
+    # Evidence completeness: % of framework-mapped controls covered by evidence
+    covered_controls = sum(
+        1 for c in controls_with_mapping if evidence_frameworks & _frameworks_for_control(c)
+    )
+    evidence_completeness = round(covered_controls / mapped_count * 100) if mapped_count > 0 else 0
+
+    # Controls missing remediation documentation
+    controls_without_remediation = [
+        MissingRemediationControl(
+            id=c.get("id", ""),
+            title=c.get("title", ""),
+            category=c.get("category", "") or "unknown",
+            severity=c.get("severity", "") or "medium",
+        )
+        for c in controls
+        if not _control_has_remediation(c)
+    ]
+    findings_without_remediation = len(controls_without_remediation)
+
+    # Readiness score weighted by coverage, evidence and remediation docs
+    remediation_penalty = (
+        min(20, round(findings_without_remediation / total_controls * 20))
+        if total_controls > 0
+        else 0
+    )
+    readiness_score = max(
+        0,
+        round((total_framework_coverage * 0.4) + (evidence_completeness * 0.4) - remediation_penalty),
+    )
+
+    return ComplianceReadinessOut(
+        totalFrameworkCoverage=total_framework_coverage,
+        frameworkCount=len(framework_controls),
+        evidenceCompleteness=evidence_completeness,
+        findingsWithoutRemediation=findings_without_remediation,
+        readinessScore=readiness_score,
+        frameworks=frameworks,
+        controlsWithoutRemediation=controls_without_remediation[:20],
+    )
+
+
+@router.get("/{run_id}/compliance-readiness", response_model=Envelope[ComplianceReadinessOut])
+async def get_compliance_readiness(
+    run_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    user: Annotated[User, Depends(get_current_user)],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
+) -> Envelope[ComplianceReadinessOut]:
+    """Return compliance readiness metrics for a stored run.
+
+    Evidence completeness is based on locked evidence packages for the run's
+    project. Framework coverage and missing-remediation counts come from the
+    control metadata stored with the run.
+    """
+    run = await _check_run_access(run_id, db, user, auth)
+
+    # Collect frameworks covered by any locked evidence package for this project
+    evidence_frameworks: set[str] = set()
+    if run.project:
+        stmt = select(Evidence.frameworks).where(Evidence.project == run.project)
+        result = await db.execute(stmt)
+        for (frameworks,) in result.all():
+            if frameworks:
+                evidence_frameworks.update(f for f in frameworks if f)
+
+    metrics = _calculate_compliance_readiness(run.controls_meta or [], evidence_frameworks)
+    return Envelope(data=metrics)
 
 
 # ── Remediation Sprint Export Endpoints ───────────────────────────────────────

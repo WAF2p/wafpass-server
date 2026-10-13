@@ -13,7 +13,7 @@ from fastapi.security import HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.config import settings
+from wafpass_server.config import settings, validate_runtime_settings
 from wafpass_server.database import get_db
 from wafpass_server.models import Validation
 from wafpass_server.routers.admin import router as admin_router

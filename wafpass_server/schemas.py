@@ -79,6 +79,30 @@ class ControlMetaSchema(BaseModel):
     checks: list[ControlCheckMetaSchema] = Field(default_factory=list)
 
 
+class FrameworkStats(BaseModel):
+    name: str
+    description: str
+    controls: int
+    pct: int
+
+
+class MissingRemediationControl(BaseModel):
+    id: str
+    title: str
+    category: str
+    severity: str
+
+
+class ComplianceReadinessOut(BaseModel):
+    totalFrameworkCoverage: int
+    frameworkCount: int
+    evidenceCompleteness: int
+    findingsWithoutRemediation: int
+    readinessScore: int
+    frameworks: list[FrameworkStats]
+    controlsWithoutRemediation: list[MissingRemediationControl]
+
+
 class ControlPackOut(BaseModel):
     version: str
     description: str
