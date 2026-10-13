@@ -89,17 +89,40 @@ def _github_api(repo_url: str, path: str, branch: str) -> dict[str, Any]:
 
 
 def get_latest_commit_info(repo_url: str, branch: str) -> CommitInfo:
-    """Get the latest commit information from a GitHub repository."""
-    data = _github_api(repo_url, f"/commits/{branch}", branch)
-    commit = data.get("commit", {})
-    committer = commit.get("committer", {})
-    author = commit.get("author", {})
+    """Get the latest commit information from a GitHub repository.
+
+    If the GitHub API is unreachable or rate-limited, returns a safe
+    placeholder so that server startup and scheduled checks keep running.
+    """
+    try:
+        data = _github_api(repo_url, f"/commits/{branch}", branch)
+        commit = data.get("commit", {})
+        committer = commit.get("committer", {})
+        author = commit.get("author", {})
+
+        return CommitInfo(
+            hash=data.get("sha", ""),
+            author=author.get("name", committer.get("name", "unknown")),
+            date=committer.get("date", "unknown"),
+            message=commit.get("message", "").split("\n", 1)[0],
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "GitHub commit check failed for %s (%s %s)",
+            repo_url,
+            exc.response.status_code,
+            exc.response.reason_phrase,
+        )
+    except httpx.RequestError as exc:
+        logger.warning("GitHub commit check network error for %s: %s", repo_url, exc)
+    except Exception as exc:
+        logger.warning("GitHub commit check unexpected error for %s: %s", repo_url, exc)
 
     return CommitInfo(
-        hash=data.get("sha", ""),
-        author=author.get("name", committer.get("name", "unknown")),
-        date=committer.get("date", "unknown"),
-        message=commit.get("message", "").split("\n", 1)[0],
+        hash="unknown",
+        author="unknown",
+        date="unknown",
+        message="GitHub API unavailable",
     )
 
 
@@ -113,6 +136,7 @@ def get_version_info(repo_url: str, branch: str) -> VersionInfo:
     """Get version information from the latest GitHub release tag.
 
     Falls back to the framework's antora.yml file if no releases exist.
+    If GitHub is unreachable or rate-limited, returns a safe placeholder.
     """
     try:
         data = _github_api(repo_url, "/releases/latest", branch)
@@ -124,30 +148,56 @@ def get_version_info(repo_url: str, branch: str) -> VersionInfo:
                 prerelease=bool(data.get("prerelease", False)),
             )
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code != 404:
-            raise
-        # No releases yet — fall through to antora.yml
+        if exc.response.status_code == 404:
+            logger.debug("No GitHub releases for %s, falling back to antora.yml", repo_url)
+        else:
+            logger.warning(
+                "GitHub release check failed for %s (%s %s), falling back to antora.yml",
+                repo_url,
+                exc.response.status_code,
+                exc.response.reason_phrase,
+            )
+    except httpx.RequestError as exc:
+        logger.warning("GitHub release check network error for %s: %s", repo_url, exc)
+        return VersionInfo(current="unknown", display="Unknown", prerelease=False)
+    except Exception as exc:
+        logger.warning("GitHub release check unexpected error for %s: %s", repo_url, exc)
+        return VersionInfo(current="unknown", display="Unknown", prerelease=False)
 
     # Fallback: read version from antora.yml on the configured branch
-    data = _github_api(
-        repo_url,
-        f"/contents/antora.yml?ref={branch}",
-        branch,
-    )
+    try:
+        data = _github_api(
+            repo_url,
+            f"/contents/antora.yml?ref={branch}",
+            branch,
+        )
 
-    content_b64 = data.get("content", "")
-    if data.get("encoding") == "base64":
-        content = base64.b64decode(content_b64).decode("utf-8")
-    else:
-        content = content_b64
+        content_b64 = data.get("content", "")
+        if data.get("encoding") == "base64":
+            content = base64.b64decode(content_b64).decode("utf-8")
+        else:
+            content = content_b64
 
-    antora_data = yaml.safe_load(content) or {}
+        antora_data = yaml.safe_load(content) or {}
 
-    return VersionInfo(
-        current=str(antora_data.get("version", "unknown")),
-        display=str(antora_data.get("display_version", "Unknown")),
-        prerelease=bool(antora_data.get("prerelease", False)),
-    )
+        return VersionInfo(
+            current=str(antora_data.get("version", "unknown")),
+            display=str(antora_data.get("display_version", "Unknown")),
+            prerelease=bool(antora_data.get("prerelease", False)),
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "GitHub antora.yml fallback failed for %s (%s %s)",
+            repo_url,
+            exc.response.status_code,
+            exc.response.reason_phrase,
+        )
+    except httpx.RequestError as exc:
+        logger.warning("GitHub antora.yml network error for %s: %s", repo_url, exc)
+    except Exception as exc:
+        logger.warning("GitHub antora.yml fallback unexpected error for %s: %s", repo_url, exc)
+
+    return VersionInfo(current="unknown", display="Unknown", prerelease=False)
 
 
 async def get_version_info_async(repo_url: str, branch: str) -> VersionInfo:
@@ -203,7 +253,9 @@ async def generate_update_info(
         send_notifications: Whether to send admin notifications for updates
 
     Returns:
-        Complete UpdateInfo object with information from the framework repo
+        Complete UpdateInfo object with information from the framework repo.
+        If the remote check fails, a degraded object is returned and persisted
+        so the file always exists and the server can keep starting.
     """
     from wafpass_server.database import AsyncSessionLocal
     from wafpass_server.models import Notification
@@ -216,17 +268,32 @@ async def generate_update_info(
     now = datetime.now(timezone.utc)
     now_str = now.isoformat()
 
-    commit, version = await run_git_update_check(repo_url, branch)
+    try:
+        commit, version = await run_git_update_check(repo_url, branch)
+    except Exception as exc:
+        # The individual helpers already log their own warnings.  This catch-all
+        # protects against any unexpected failure during the async orchestration.
+        logger.error("Failed to fetch framework update info from GitHub: %s", exc)
+        commit = CommitInfo(
+            hash="unknown",
+            author="unknown",
+            date="unknown",
+            message="GitHub API unavailable",
+        )
+        version = VersionInfo(current="unknown", display="Unknown", prerelease=False)
 
     # Check for updates by comparing with previously stored hash
     update_msg = ""
-    try:
-        old_info = load_existing_update_info(yaml_path)
-        old_hash = old_info.framework.last_commit.hash
-        if old_hash != commit.hash:
-            update_msg = f"Framework updated: {old_hash[:8]} -> {commit.hash[:8]}"
-    except FileNotFoundError:
-        pass
+    if commit.hash != "unknown":
+        try:
+            old_info = load_existing_update_info(yaml_path)
+            old_hash = old_info.framework.last_commit.hash
+            if old_hash != commit.hash:
+                update_msg = f"Framework updated: {old_hash[:8]} -> {commit.hash[:8]}"
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning("Could not compare with previous update info: %s", exc)
 
     update_info = UpdateInfo(
         version=version.current,
@@ -241,8 +308,8 @@ async def generate_update_info(
         checks={
             "last_run": now_str,
             "next_run": "",
-            "status": "success",
-            "error": None,
+            "status": "success" if commit.hash != "unknown" and version.current != "unknown" else "degraded",
+            "error": None if (commit.hash != "unknown" and version.current != "unknown") else "GitHub API unreachable or rate-limited",
         },
     )
 
@@ -295,10 +362,13 @@ async def check_for_updates() -> dict[str, Any]:
 
     try:
         info = await generate_update_info(yaml_path)
+        checks = info.checks or {}
+        healthy = checks.get("status") == "success"
         return {
-            "success": True,
+            "success": healthy,
             "framework": info.framework.model_dump(),
             "generated_at": info.generated_at,
+            "error": checks.get("error") if not healthy else None,
         }
     except Exception as e:
         logger.error(f"Update check failed: {e}")

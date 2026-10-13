@@ -6,6 +6,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_JWT_SECRET = "change-me-in-production-wafpass-secret-key"
 
+# Sentinel values that are unsafe for any real deployment.
+_DISALLOWED_JWT_SECRETS = frozenset({
+    _DEFAULT_JWT_SECRET,
+    "change-me-in-production",
+    "",
+})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -35,8 +42,12 @@ class Settings(BaseSettings):
     wafpass_admin_role: str = "admin"
 
     # Pre-shared API key for machine-to-machine access (CI/CD --push workflow).
-    # Empty = disabled.  Set X-Api-Key header to this value on POST /runs / POST /scan.
+    # Empty = disabled.  Set X-Api-Key header to this value on POST /api/v1/runs / POST /api/v1/scan.
     wafpass_api_key: str = ""
+
+    # Pre-shared key for the validation gateway to call the internal signing
+    # endpoint. Empty = disabled. Keep secret and rotate regularly.
+    wafpass_internal_api_key: str = ""
 
     # Public base URL used to build absolute links in QR codes and audit reports.
     # Set this to the externally reachable address of the server, e.g.
@@ -45,7 +56,7 @@ class Settings(BaseSettings):
     wafpass_public_url: str = ""
 
     # Server-side scan settings
-    # Set WAFPASS_SCAN_ENABLED=false to disable POST /scan entirely.
+    # Set WAFPASS_SCAN_ENABLED=false to disable POST /api/v1/scan entirely.
     wafpass_scan_enabled: bool = True
     # If set, all scan paths must resolve within this directory (path-traversal guard).
     # Leave empty to allow any path accessible to the server process (dev/local only).
@@ -58,6 +69,18 @@ class Settings(BaseSettings):
     # Legacy: used by the update checker to locate a local framework clone.
     # Defaults to /app for containerized deployments.
     wafpass_base_path: str = "/app"
+
+    # ── Validation authority keys ─────────────────────────────────────────────
+    # Directory containing root.key, root.crt, server.key, server.crt.
+    # If files are missing they are generated once (dev/local only).
+    # In production mount PEM files from a KMS/secret store.
+    wafpass_validation_keys_dir: str = ""
+
+    # Path to the gateway-issued server sub-CA certificate. When set, this
+    # certificate is served by GET /api/v1/validations/server.crt and included
+    # by the dashboard/CLI in validation submissions to the gateway. If empty,
+    # the legacy server.crt in wafpass_validation_keys_dir is used.
+    wafpass_server_subca_cert: str = ""
 
     # Public Git URL for the WAF++ framework repository.
     # The update checker fetches version and commit information from this repo.
@@ -85,9 +108,21 @@ class Settings(BaseSettings):
     vault_transit_mount: str = "transit"
 
     @model_validator(mode="after")
-    def _allow_defaults_in_local_and_test(self) -> "Settings":
-        """Instantiation-time validation must not break imports in tests/CI."""
-        # Strict runtime checks are performed by validate_runtime_settings() instead.
+    def _require_non_default_secrets_in_production(self) -> "Settings":
+        if self.wafpass_jwt_secret in _DISALLOWED_JWT_SECRETS:
+            raise ValueError(
+                "WAFPASS_JWT_SECRET must be set to a strong random value. "
+                "The default / placeholder value is not allowed in any environment. "
+                "Generate a random 32-byte secret and set it via the WAFPASS_JWT_SECRET "
+                "environment variable. If you are running locally, use 'wafpass init --mode dashboard' "
+                "to generate a valid .env file."
+            )
+        if self.wafpass_env != "local" and not self.wafpass_encryption_key:
+            raise ValueError(
+                "WAFPASS_ENCRYPTION_KEY must be set in non-local environments. "
+                "Without it, SSO secrets are derived from WAFPASS_JWT_SECRET, "
+                "which is insecure if that secret is ever rotated or leaked."
+            )
         return self
 
     @property

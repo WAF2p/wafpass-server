@@ -5,16 +5,16 @@ computers, TVs, or web pages. Each widget has a unique token for authentication
 and can be configured to show specific projects, data types, and refresh intervals.
 
 Public endpoints (no auth required):
-  GET /widget/p/{token}.json      → JSON data for the widget
-  GET /widget/p/{token}/badge.svg → SVG badge for the widget
+  GET /api/v1/widget/p/{token}.json      → JSON data for the widget
+  GET /api/v1/widget/p/{token}/badge.svg → SVG badge for the widget
 
 Authenticated endpoints (admin or engineer role required):
-  POST /widgets                     → Create a new widget
-  GET /widgets                      → List all widgets
-  GET /widgets/{id}                 → Get widget details
-  PUT /widgets/{id}                 → Update a widget
-  DELETE /widgets/{id}              → Delete a widget
-  GET /widget/{id}/data             → Get widget data (internal use)
+  POST /api/v1/widgets                     → Create a new widget
+  GET /api/v1/widgets                      → List all widgets
+  GET /api/v1/widgets/{id}                 → Get widget details
+  PUT /api/v1/widgets/{id}                 → Update a widget
+  DELETE /api/v1/widgets/{id}              → Delete a widget
+  GET /api/v1/widget/{id}/data             → Get widget data (internal use)
 """
 from __future__ import annotations
 
