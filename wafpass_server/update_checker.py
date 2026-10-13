@@ -19,6 +19,7 @@ from urllib.parse import urlparse
 import httpx
 import yaml
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass_server.config import settings
 
@@ -322,13 +323,27 @@ async def generate_update_info(
 
 
 async def _send_update_notifications(message: str) -> None:
-    """Send notifications to all admin users about framework updates."""
-    try:
-        from wafpass_server.database import AsyncSessionLocal
-        from wafpass_server.models import User
+    """Send notifications to all admin users about framework updates.
 
-        async with AsyncSessionLocal() as db:
-            from sqlalchemy import select
+    Owner connection, not the pooled ``AsyncSessionLocal`` — this is a
+    scheduled background job with no request and no AuthContext, so no
+    mandate/holding GUC is ever set for it. Once multi-mandant mode is
+    active, a plain RLS-enforced session would silently see zero admins
+    here regardless of how many actually exist, same shape as the
+    bootstrap-admin-seeding bug fixed in main.py's
+    ``seed_bootstrap_admin_if_empty()``. A framework-update notice is a
+    platform-wide event, not a per-mandate one, so every mandate's admins
+    should hear about it — the owner role's RLS bypass is exactly right
+    here, not a workaround.
+    """
+    try:
+        from sqlalchemy import select
+
+        from wafpass_server.database import get_owner_connection
+        from wafpass_server.models import Notification, User
+
+        async with get_owner_connection() as conn:
+            db = AsyncSession(bind=conn)
 
             stmt = select(User).where(User.role == "admin", User.is_active == True)
             result = await db.execute(stmt)
@@ -337,18 +352,42 @@ async def _send_update_notifications(message: str) -> None:
             if not admins:
                 return
 
-            notification = Notification(
-                title="Framework Update Detected",
-                message=f"Framework update detected\n\n{message}",
-                category="urgent",
-                triggered_by="system",
-                target_role="admin",
-            )
-            for _ in admins:
-                db.add(notification)
+            # notifications.mandant_id is NOT NULL once multi-mandant mode
+            # is active (an ordinary tenant table, same as every other one
+            # created via POST /notifications) — a holding-only admin
+            # (mandant_id=None) has no mandate of their own to tag a row
+            # with, but doesn't need one either: their holding bypass
+            # already makes any one mandate's row visible to them. One row
+            # per *distinct* real mandate covers every mandate-scoped
+            # admin exactly once (not once per admin sharing that mandate,
+            # which would just be duplicate alerts — also fixes a
+            # pre-existing bug here: the single `notification` object used
+            # to be re-added for every admin instead of creating one per
+            # mandate, so only one row was ever actually inserted no
+            # matter how many admins existed).
+            target_mandant_ids = {admin.mandant_id for admin in admins if admin.mandant_id is not None}
+            if not target_mandant_ids:
+                # Single-tenant mode (mandant_id is nullable there, same as
+                # before this fix existed) or a multi-mandant instance
+                # where every admin happens to be holding-only.
+                target_mandant_ids = {None}
+
+            for mandant_id in target_mandant_ids:
+                db.add(
+                    Notification(
+                        title="Framework Update Detected",
+                        message=f"Framework update detected\n\n{message}",
+                        category="urgent",
+                        triggered_by="system",
+                        target_role="admin",
+                        mandant_id=mandant_id,
+                    )
+                )
 
             await db.commit()
-            logger.info(f"Sent {len(admins)} framework update notifications")
+            logger.info(
+                f"Sent {len(target_mandant_ids)} framework update notification(s) covering {len(admins)} admin(s)"
+            )
     except Exception as e:
         logger.error(f"Failed to send update notifications: {e}")
 

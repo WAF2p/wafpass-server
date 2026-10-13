@@ -24,15 +24,22 @@ from typing import Any, Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import require_role
+from wafpass_server.auth.deps import AuthContext, adopt_mandate_of, get_auth_context, get_scoped_db, require_role
 from wafpass_server.database import get_db
 from wafpass_server.models import Widget, User, Run
 from wafpass_server.schemas import WidgetConfig, WidgetCreate, WidgetOut
 
 router = APIRouter(tags=["widgets"])
+
+
+async def _set_public_lookup_token(db: AsyncSession, token: str) -> None:
+    """Auth-bootstrap carve-out for an anonymous widget lookup — same
+    pattern as evidence.py. See db_migrations/activate_multi_mandant_ddl.py.
+    """
+    await db.execute(text("SELECT set_config('app.public_lookup_token', :v, true)"), {"v": token})
 
 # ── Tier metadata for badges ──────────────────────────────────────────────────
 
@@ -145,6 +152,7 @@ async def widget_public_data(
             }
         }
     """
+    await _set_public_lookup_token(db, token)
     result = await db.execute(select(Widget).where(Widget.token == token))
     widget: Widget | None = result.scalar_one_or_none()
 
@@ -154,9 +162,14 @@ async def widget_public_data(
     if not widget.is_active:
         raise HTTPException(status_code=403, detail="Widget is disabled")
 
+    await adopt_mandate_of(db, widget.mandant_id)
+
     # Update last accessed timestamp
     widget.last_accessed_at = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
     await db.commit()
+    # db.commit() ends the transaction, which clears the SET LOCAL above
+    # (it's transaction-scoped) — re-apply before the Run queries below.
+    await adopt_mandate_of(db, widget.mandant_id)
 
     project_filter: list[str] = projects or []
 
@@ -226,6 +239,7 @@ async def widget_public_badge(
 
     The badge reflects the best score across all projects (or the filtered set).
     """
+    await _set_public_lookup_token(db, token)
     result = await db.execute(select(Widget).where(Widget.token == token))
     widget: Widget | None = result.scalar_one_or_none()
 
@@ -234,6 +248,8 @@ async def widget_public_badge(
 
     if not widget.is_active:
         raise HTTPException(status_code=403, detail="Widget is disabled")
+
+    await adopt_mandate_of(db, widget.mandant_id)
 
     project_filter: list[str] = projects or []
 
@@ -271,8 +287,9 @@ async def widget_public_badge(
 @router.post("/widgets", response_model=WidgetOut)
 async def create_widget(
     payload: WidgetCreate,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     _: Annotated[User, Depends(require_role("engineer"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> WidgetOut:
     """Create a new widget.
 
@@ -286,6 +303,7 @@ async def create_widget(
         token=secrets.token_urlsafe(32),
         config=payload.config.model_dump() if hasattr(payload.config, "model_dump") else payload.config,
         is_active=True,
+        mandant_id=auth.mandant_id,
     )
     db.add(widget)
     await db.commit()
@@ -295,7 +313,7 @@ async def create_widget(
 
 @router.get("/widgets", response_model=list[WidgetOut])
 async def list_widgets(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     _: Annotated[User, Depends(require_role("engineer"))],
     is_active: bool | None = Query(default=None, description="Filter by active status"),
 ) -> list[WidgetOut]:
@@ -318,7 +336,7 @@ async def list_widgets(
 @router.get("/widgets/{id}", response_model=WidgetOut)
 async def get_widget(
     id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     _: Annotated[User, Depends(require_role("engineer"))],
 ) -> WidgetOut:
     """Get widget details by ID.
@@ -338,7 +356,7 @@ async def get_widget(
 async def update_widget(
     id: uuid.UUID,
     payload: WidgetCreate,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     _: Annotated[User, Depends(require_role("engineer"))],
 ) -> WidgetOut:
     """Update a widget.
@@ -363,7 +381,7 @@ async def update_widget(
 @router.delete("/widgets/{id}")
 async def delete_widget(
     id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     _: Annotated[User, Depends(require_role("admin"))],
 ) -> dict[str, str]:
     """Delete a widget.
@@ -385,7 +403,7 @@ async def delete_widget(
 @router.get("/widget/{id}/data")
 async def get_widget_data(
     id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     _: Annotated[User, Depends(require_role("engineer"))],
 ) -> dict[str, Any]:
     """Get widget data for internal use (with full project details).

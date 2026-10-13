@@ -24,7 +24,18 @@ def _generate_random_secret() -> str:
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Owner/superuser role. Used only by Alembic migrations and the one-time
+    # multi-mandant activation DDL — never for ordinary request traffic.
+    # Postgres superusers always bypass row-level security, so routing
+    # ordinary queries through this role would make every RLS policy a
+    # silent no-op (see decisions/adrs/ADR-003-multi-mandant-tenancy.md).
     database_url: str = "postgresql+asyncpg://wafpass:wafpass@localhost:5432/wafpass"
+
+    # Least-privilege, non-superuser role for every ordinary request. This
+    # is what wafpass_server.database.get_db() actually connects with.
+    # Defaults to a local "wafpass_app" role — see db-init/02-wafpass-app-role.sql.
+    runtime_database_url: str = "postgresql+asyncpg://wafpass_app:wafpass_app@localhost:5432/wafpass"
+
     wafpass_env: str = "local"
 
     # CORS origins (comma-separated)

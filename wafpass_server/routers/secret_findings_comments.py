@@ -9,9 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from wafpass_server.auth.deps import require_role
-from wafpass_server.database import get_db
-from wafpass_server.models import FindingComment, RunFinding, SecretFindingComment, User
+from wafpass_server.auth.deps import AuthContext, get_auth_context, get_scoped_db, require_group_access, require_role
+from wafpass_server.models import Run, RunSecretFinding, SecretFindingComment, User
 from wafpass_server.schemas import Envelope, SecretFindingCommentIn, SecretFindingCommentOut
 
 router = APIRouter(prefix="/secret-findings/{secret_finding_id}/comments", tags=["secret-findings-comments"])
@@ -20,10 +19,19 @@ router = APIRouter(prefix="/secret-findings/{secret_finding_id}/comments", tags=
 @router.get("", response_model=Envelope[list[SecretFindingCommentOut]])
 async def list_secret_finding_comments(
     secret_finding_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[list[SecretFindingCommentOut]]:
     """List all comments on a secret finding."""
+    secret_finding = await db.get(RunSecretFinding, secret_finding_id)
+    if secret_finding is None:
+        raise HTTPException(status_code=404, detail="Secret finding not found")
+
+    run = await db.get(Run, secret_finding.run_id)
+    if run is not None:
+        await require_group_access(run.project, db, user, auth)
+
     stmt = (
         select(SecretFindingComment)
         .where(SecretFindingComment.secret_finding_id == secret_finding_id)
@@ -59,19 +67,25 @@ async def list_secret_finding_comments(
 async def create_secret_finding_comment(
     secret_finding_id: uuid.UUID,
     payload: SecretFindingCommentIn,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     current_user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[SecretFindingCommentOut]:
     """Create a comment on a secret finding."""
-    # First, we need to find the secret finding by querying the run's secret_findings
-    # Since secret findings are stored in JSONB, we need to use a different approach
-    # For now, we'll just create the comment - the secret finding ID is provided by the client
-    # and should correspond to an entry in run.secret_findings JSONB array
+    secret_finding = await db.get(RunSecretFinding, secret_finding_id)
+    if secret_finding is None:
+        raise HTTPException(status_code=404, detail="Secret finding not found")
+
+    run = await db.get(Run, secret_finding.run_id)
+    if run is not None:
+        await require_group_access(run.project, db, current_user, auth)
 
     comment = SecretFindingComment(
         secret_finding_id=secret_finding_id,
+        run_id=secret_finding.run_id,
         user_id=current_user.id,
         message=payload.message,
+        mandant_id=auth.mandant_id,
     )
     db.add(comment)
     await db.commit()
@@ -97,8 +111,9 @@ async def create_secret_finding_comment(
 async def delete_secret_finding_comment(
     secret_finding_id: uuid.UUID,
     comment_id: uuid.UUID,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     current_user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> None:
     """Delete a comment on a secret finding.
 
@@ -107,6 +122,13 @@ async def delete_secret_finding_comment(
     comment = await db.get(SecretFindingComment, comment_id)
     if comment is None:
         raise HTTPException(status_code=404, detail="Comment not found")
+
+    if comment.secret_finding_id != secret_finding_id:
+        raise HTTPException(status_code=404, detail="Comment does not belong to this secret finding")
+
+    run = await db.get(Run, comment.run_id)
+    if run is not None:
+        await require_group_access(run.project, db, current_user, auth)
 
     # Check ownership - only owners can delete (no admin override for secret findings)
     if comment.user_id != current_user.id:

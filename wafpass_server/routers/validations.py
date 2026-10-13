@@ -23,7 +23,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, Response
 from pydantic import ValidationError as PydanticValidationError
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wafpass.attestation import (
@@ -47,10 +47,10 @@ except Exception:  # pragma: no cover - reportlab may not be installed
     _PDF_CERTIFICATE_AVAILABLE = False
     generate_validation_certificate = None  # type: ignore[misc, assignment]
 
-from wafpass_server.auth.deps import require_role
+from wafpass_server.auth.deps import adopt_mandate_of, get_scoped_db, require_role
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
-from wafpass_server.models import Run, User, UserAuditLog, Validation
+from wafpass_server.models import Mandant, Run, User, UserAuditLog, Validation
 from wafpass_server.schemas import (
     Envelope,
     InternalValidationSubmit,
@@ -62,6 +62,14 @@ from wafpass_server.schemas import (
 from wafpass_server.validation_service import load_validation_service
 
 router = APIRouter(prefix="/validations", tags=["validations"])
+
+
+async def _set_public_lookup_token(db: AsyncSession, validation_id: str) -> None:
+    """Auth-bootstrap carve-out for an anonymous validation lookup by its
+    public validation_id — same pattern as evidence.py/widgets.py. See
+    db_migrations/activate_multi_mandant_ddl.py.
+    """
+    await db.execute(text("SELECT set_config('app.public_lookup_token', :v, true)"), {"v": validation_id})
 
 
 # Module-level singleton. Created lazily on first request so the app can start
@@ -203,6 +211,21 @@ async def submit_validation_internal(
 
     canonical_hash = attestation.canonical_hash
 
+    # Phase 4 — mandate carried through from create_run_attestation() via
+    # the dashboard and the external gateway (see LocalAttestationOut).
+    # Degrades gracefully to NULL (not rejected) if it didn't arrive — see
+    # the exemption note in db_migrations/activate_multi_mandant_ddl.py.
+    validation_mandant_id: uuid.UUID | None = None
+    if payload.mandant_id:
+        try:
+            candidate_id = uuid.UUID(payload.mandant_id)
+        except ValueError:
+            candidate_id = None
+        if candidate_id is not None:
+            mandant_result = await db.execute(select(Mandant).where(Mandant.id == candidate_id))
+            if mandant_result.scalar_one_or_none() is not None:
+                validation_mandant_id = candidate_id
+
     # Use the gateway's validation ID so both stores share the same identifier.
     validation_id = payload.gateway_request_id or str(uuid.uuid4())
     base_url = _base_url(request)
@@ -248,7 +271,13 @@ async def submit_validation_internal(
         validated_at=validated_at_dt,
         expires_at=expires_at_dt,
         validation_metadata=payload.metadata or {},
+        mandant_id=validation_mandant_id,
     )
+    # This session (plain get_db(), internal-key-authenticated, not JWT)
+    # has no RLS context at all otherwise — adopt the resolved mandate
+    # before inserting, or WITH CHECK rejects the row regardless of what
+    # mandant_id Python sets (same pattern as every other bootstrap case).
+    await adopt_mandate_of(db, validation_mandant_id)
     db.add(validation)
     await db.commit()
     await db.refresh(validation)
@@ -267,6 +296,7 @@ async def submit_validation_internal(
             "metadata": payload.metadata or {},
         },
         ip=client_ip,
+        mandant_id=validation_mandant_id,
     ))
     await db.commit()
 
@@ -276,7 +306,7 @@ async def submit_validation_internal(
 @router.get("/{validation_id}", response_model=Envelope[ValidationRecord])
 async def get_validation(
     validation_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     _: Annotated[User, Depends(require_role("clevel"))],
 ) -> Envelope[ValidationRecord]:
     """Return the full validation record (authenticated)."""
@@ -293,6 +323,7 @@ async def verify_validation(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Envelope[ValidationVerify]:
     """Public endpoint to retrieve the signed validation record."""
+    await _set_public_lookup_token(db, validation_id)
     result = await db.execute(select(Validation).where(Validation.validation_id == validation_id))
     validation = result.scalar_one_or_none()
     if validation is None:
@@ -306,6 +337,7 @@ async def get_badge_svg(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Response:
     """Return an embeddable SVG badge for the validation (public)."""
+    await _set_public_lookup_token(db, validation_id)
     result = await db.execute(select(Validation).where(Validation.validation_id == validation_id))
     validation = result.scalar_one_or_none()
     if validation is None:
@@ -321,6 +353,7 @@ async def get_badge_json(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Envelope[ValidationBadge]:
     """Return the portable badge JSON for the validation (public)."""
+    await _set_public_lookup_token(db, validation_id)
     result = await db.execute(select(Validation).where(Validation.validation_id == validation_id))
     validation = result.scalar_one_or_none()
     if validation is None:
@@ -338,6 +371,7 @@ async def get_validation_certificate_pdf(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> FileResponse:
     """Return a printable PDF certificate for the validation (public)."""
+    await _set_public_lookup_token(db, validation_id)
     result = await db.execute(select(Validation).where(Validation.validation_id == validation_id))
     validation = result.scalar_one_or_none()
     if validation is None:
@@ -367,7 +401,7 @@ async def get_validation_certificate_pdf(
 @router.post("/{validation_id}/revoke")
 async def revoke_validation(
     validation_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("admin"))],
 ) -> dict[str, str]:
     """Revoke a validation (admin only)."""

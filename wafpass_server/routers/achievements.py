@@ -7,15 +7,23 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import require_role
+from wafpass_server.auth.deps import AuthContext, bypasses_group_scoping, get_auth_context, get_scoped_db, require_group_access, require_role
 from wafpass_server.database import get_db
-from wafpass_server.models import ProjectAchievement, Run, User
+from wafpass_server.models import ProjectAchievement, ProjectGroup, Run, User, UserGroup
 from wafpass_server.schemas import AchievementOut, Envelope
 
 router = APIRouter(tags=["achievements"])
+
+
+async def _set_public_lookup_token(db: AsyncSession, token: str) -> None:
+    """Auth-bootstrap carve-out for an anonymous achievement-verification
+    lookup — same pattern as evidence.py/widgets.py/validations.py. See
+    db_migrations/activate_multi_mandant_ddl.py.
+    """
+    await db.execute(text("SELECT set_config('app.public_lookup_token', :v, true)"), {"v": token})
 
 # ── Tier definitions (must match UI thresholds in SettingsPage.tsx) ───────────
 
@@ -45,11 +53,35 @@ def tier_for_score(score: int) -> int:
     return level
 
 
+async def _accessible_projects(db: AsyncSession, user: User, auth: AuthContext) -> set[str] | None:
+    """Return the projects a group-scoped user can see, or None when no group filter applies."""
+    if bypasses_group_scoping(user, auth):
+        return None
+
+    result = await db.execute(
+        select(UserGroup.group_name).where(UserGroup.user_id == user.id)
+    )
+    user_groups = result.scalars().all()
+    if not user_groups:
+        return set()
+
+    result = await db.execute(
+        select(ProjectGroup.project).where(ProjectGroup.group_name.in_(user_groups))
+    )
+    return set(result.scalars().all())
+
+
 # ── Achievement evaluation (called from POST /runs) ───────────────────────────
 
 
 async def evaluate_and_record_achievements(db: AsyncSession, run: Run) -> list[ProjectAchievement]:
-    """Create achievement records for any tier the project reaches for the first time."""
+    """Create achievement records for any tier the project reaches for the first time.
+
+    Only ever called from the ingest path (_persist_run / trigger_scan),
+    *after* those callers have already tagged ``run.mandant_id`` (Phase 4) —
+    read directly off the passed-in row rather than taking a separate
+    parameter, so there's only one place that can disagree with itself.
+    """
     if not run.project:
         return []
 
@@ -77,6 +109,7 @@ async def evaluate_and_record_achievements(db: AsyncSession, run: Run) -> list[P
             run_id=run.id,
             verification_token=secrets.token_urlsafe(32),
             snapshot_jsonb=run.pillar_scores or {},
+            mandant_id=run.mandant_id,
         )
         db.add(achievement)
         new_achievements.append(achievement)
@@ -93,15 +126,24 @@ async def evaluate_and_record_achievements(db: AsyncSession, run: Run) -> list[P
 
 @router.get("/achievements", response_model=Envelope[list[AchievementOut]])
 async def list_achievements(
-    db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
     project: str | None = Query(default=None),
 ) -> Envelope[list[AchievementOut]]:
+    if project:
+        await require_group_access(project, db, user, auth)
+
+    accessible = await _accessible_projects(db, user, auth)
     stmt = select(ProjectAchievement).order_by(
         ProjectAchievement.project, ProjectAchievement.tier_level
     )
     if project:
         stmt = stmt.where(ProjectAchievement.project == project)
+    elif accessible is not None:
+        if not accessible:
+            return Envelope(data=[])
+        stmt = stmt.where(ProjectAchievement.project.in_(accessible))
     result = await db.execute(stmt)
     return Envelope(data=list(result.scalars().all()))
 
@@ -109,9 +151,11 @@ async def list_achievements(
 @router.get("/achievements/{project}", response_model=Envelope[list[AchievementOut]])
 async def list_project_achievements(
     project: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
-    _: Annotated[User, Depends(require_role("clevel"))],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    user: Annotated[User, Depends(require_role("clevel"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[list[AchievementOut]]:
+    await require_group_access(project, db, user, auth)
     result = await db.execute(
         select(ProjectAchievement)
         .where(ProjectAchievement.project == project)
@@ -128,6 +172,7 @@ async def verify_achievement(
     token: str,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> HTMLResponse:
+    await _set_public_lookup_token(db, token)
     result = await db.execute(
         select(ProjectAchievement).where(ProjectAchievement.verification_token == token)
     )

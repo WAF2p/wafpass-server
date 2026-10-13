@@ -208,6 +208,7 @@ async def trigger_scan(
         secret_findings=[sf.model_dump() for sf in result.secret_findings],
         plan_changes=result.plan_changes,
         source_snapshot=result.source_snapshot,
+        mandant_id=auth.mandant_id,
     )
     db.add(run)
     await db.commit()
@@ -217,7 +218,7 @@ async def trigger_scan(
     from wafpass_server.routers.runs import _finding_rows
     server_findings = [FindingSchema(**f.model_dump()) for f in result.findings]
     if server_findings:
-        db.add_all(_finding_rows(run.id, server_findings))
+        db.add_all(_finding_rows(run.id, server_findings, auth.mandant_id))
         await db.commit()
 
     await evaluate_and_record_achievements(db, run)

@@ -13,6 +13,25 @@ jobs:
       id-token: write     # PyPI trusted publishing (OIDC)
       attestations: write  # persist build-provenance attestations (if added later)
 
+    # tests/test_mandants.py (and every other DB-gated test) is skipped,
+    # not failed, whenever WAFPASS_TEST_DATABASE_URL is unset — which it
+    # always was here before this service existed, so the 59+ multi-mandant
+    # integration tests never actually ran in CI, only locally. This service
+    # container plus the env var on the Test step below make them run for
+    # real on every push to main.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,6 +124,8 @@ jobs:
 
       - name: Test
         run: pytest
+        env:
+          WAFPASS_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 
       # ── Publish to PyPI (trusted publishing / OIDC) ───────────────────────────
       - name: Publish to PyPI

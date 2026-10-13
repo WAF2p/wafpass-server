@@ -7,8 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wafpass_server.auth.deps import require_role
-from wafpass_server.database import get_db
+from wafpass_server.auth.deps import AuthContext, get_auth_context, get_scoped_db, require_role
 from wafpass_server.models import Notification, User
 from wafpass_server.schemas import (
     Envelope,
@@ -24,7 +23,7 @@ router = APIRouter(prefix="/notifications", tags=["notifications"])
 
 @router.get("", response_model=Envelope[list[NotificationOut]])
 async def list_notifications(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("admin"))],
 ) -> Envelope[list[NotificationOut]]:
     """List all notifications. Admin users see all notifications."""
@@ -37,8 +36,9 @@ async def list_notifications(
 @router.post("", response_model=Envelope[NotificationOut])
 async def create_notification(
     payload: NotificationCreate,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("admin"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[NotificationOut]:
     """Create a new notification."""
     notification = Notification(
@@ -47,6 +47,7 @@ async def create_notification(
         category=payload.category,
         triggered_by=user.username,
         target_role=payload.target_role,
+        mandant_id=auth.mandant_id,
     )
     db.add(notification)
     await db.commit()
@@ -57,8 +58,9 @@ async def create_notification(
 @router.post("/trigger", response_model=Envelope[NotificationOut])
 async def trigger_notification(
     payload: NotificationCreate,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("admin"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[NotificationOut]:
     """Trigger a new notification (alias for POST /notifications)."""
     notification = Notification(
@@ -67,6 +69,7 @@ async def trigger_notification(
         category=payload.category,
         triggered_by=user.username,
         target_role=payload.target_role,
+        mandant_id=auth.mandant_id,
     )
     db.add(notification)
     await db.commit()
@@ -77,8 +80,9 @@ async def trigger_notification(
 @router.post("/test", response_model=Envelope[NotificationTestOut])
 async def test_notification(
     payload: NotificationTestIn,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("admin"))],
+    auth: Annotated[AuthContext, Depends(get_auth_context)],
 ) -> Envelope[NotificationTestOut]:
     """Send a test notification. Returns the notification that would be created."""
     notification = Notification(
@@ -87,6 +91,7 @@ async def test_notification(
         category=payload.category,
         triggered_by=user.username,
         target_role=payload.target_role,
+        mandant_id=auth.mandant_id,
     )
     db.add(notification)
     await db.commit()
@@ -109,7 +114,7 @@ async def test_notification(
 async def mark_as_read(
     notification_id: str,
     payload: NotificationUpdateRead,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("admin"))],
 ) -> Envelope[NotificationOut]:
     """Mark a notification as read."""
@@ -124,7 +129,7 @@ async def mark_as_read(
 
 @router.put("/read-all", response_model=Envelope[dict])
 async def mark_all_as_read(
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("admin"))],
 ) -> Envelope[dict]:
     """Mark all notifications as read."""
@@ -137,7 +142,7 @@ async def mark_all_as_read(
 @router.delete("/{notification_id}", status_code=204)
 async def delete_notification(
     notification_id: str,
-    db: Annotated[AsyncSession, Depends(get_db)],
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
     user: Annotated[User, Depends(require_role("admin"))],
 ) -> None:
     """Delete a notification."""

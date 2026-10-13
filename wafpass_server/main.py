@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import Validation
+from wafpass_server.routers.admin import router as admin_router
 from wafpass_server.routers.auth import router as auth_router
 from wafpass_server.routers.controls import router as controls_router
 from wafpass_server.routers.control_packs import router as control_packs_router
@@ -35,6 +36,7 @@ from wafpass_server.routers.findings_comments import router as findings_comments
 from wafpass_server.routers.secret_findings_comments import router as secret_findings_comments_router
 from wafpass_server.routers.widgets import router as widgets_router
 from wafpass_server.routers.notifications import router as notifications_router
+from wafpass_server.routers.pipelines import router as pipelines_router
 from wafpass_server.routers.update_checker import router as update_router
 from wafpass_server.routers.auto_fix import router as auto_fix_router
 from wafpass_server.routers.validations import router as validations_router
@@ -54,6 +56,7 @@ app = FastAPI(
     openapi_tags=[
         {"name": "auth", "description": "Login, token refresh, logout, user management."},
         {"name": "runs", "description": "Scan run results ingestion and retrieval."},
+        {"name": "pipelines", "description": "CI/CD pipeline metrics and trends."},
         {"name": "controls", "description": "WAF++ control catalogue management."},
         {"name": "control-packs", "description": "Versioned control pack import, activation and rollback."},
         {"name": "waivers", "description": "Team-shared waiver records."},
@@ -102,12 +105,14 @@ app.add_middleware(
 )
 
 app.include_router(auth_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
 app.include_router(compliance_audit_router, prefix="/api/v1")
 app.include_router(sso_router, prefix="/api/v1")
 app.include_router(achievements_router, prefix="/api/v1")
 app.include_router(badges_router, prefix="/api/v1")
 app.include_router(leaderboard_router, prefix="/api/v1")
 app.include_router(runs_router, prefix="/api/v1")
+app.include_router(pipelines_router, prefix="/api/v1")
 app.include_router(controls_router, prefix="/api/v1")
 app.include_router(control_packs_router, prefix="/api/v1")
 app.include_router(waivers_router, prefix="/api/v1")
@@ -267,6 +272,57 @@ def _validate_startup_config() -> None:
         sys.exit(1)
 
 
+async def seed_bootstrap_admin_if_empty(logger: logging.Logger) -> None:
+    """Create the bootstrap admin user if the users table is empty.
+
+    Extracted into its own function so it's directly testable, independent
+    of _configure_logging_and_seed_admin()'s logging setup, config
+    validation, and background update-checker task — none of which this
+    needs or should pull in just to verify this one behaviour.
+    """
+    if not settings.wafpass_admin_password:
+        return  # seeding disabled
+
+    from sqlalchemy import select, func
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from wafpass_server.database import get_owner_connection
+    from wafpass_server.models import User
+    from wafpass_server.auth.providers.local import hash_password
+
+    # Owner connection, not the pooled AsyncSessionLocal: once multi-mandant
+    # mode is active, a plain RLS-enforced session sees ZERO rows here
+    # regardless of how many users actually exist (no mandate/holding GUC
+    # is ever set for this startup-time check), which made this block
+    # conclude "table is empty" on every restart and try to insert a
+    # second bootstrap admin — which then itself failed RLS's WITH CHECK
+    # (no mandate, no holding flag), crashing the entire startup. Found via
+    # a real crash-loop (9 restarts) on a live instance already in
+    # multi_mandant mode. This check is a privileged, one-time bootstrap
+    # action, same category as Alembic migrations and the activation DDL —
+    # it belongs on the owner role, which RLS does not apply to at all,
+    # not on ordinary runtime traffic's role.
+    async with get_owner_connection() as conn:
+        db = AsyncSession(bind=conn)
+        count = (await db.execute(select(func.count()).select_from(User))).scalar_one()
+        if count > 0:
+            logger.info("Users already exist — skipping admin seeding")
+            return  # users already exist — don't overwrite anything
+
+        admin = User(
+            username=settings.wafpass_admin_username,
+            display_name="Administrator",
+            role=settings.wafpass_admin_role,
+            auth_provider="local",
+            password_hash=hash_password(settings.wafpass_admin_password),
+        )
+        db.add(admin)
+        await db.commit()
+        print(
+            f"[wafpass-server] Seeded admin user '{settings.wafpass_admin_username}' "
+            f"with role '{settings.wafpass_admin_role}'."
+        )
+
+
 @app.on_event("startup")
 async def _configure_logging_and_seed_admin() -> None:
     """Configure logging, validate config, and create the bootstrap admin user if no users exist."""
@@ -298,33 +354,7 @@ async def _configure_logging_and_seed_admin() -> None:
         import traceback
         logging.getLogger("wafpass_server").error(f"Traceback: {traceback.format_exc()}")
 
-    if not settings.wafpass_admin_password:
-        return  # seeding disabled
-
-    from sqlalchemy import select, func
-    from wafpass_server.database import AsyncSessionLocal
-    from wafpass_server.models import User
-    from wafpass_server.auth.providers.local import hash_password
-
-    async with AsyncSessionLocal() as db:
-        count = (await db.execute(select(func.count()).select_from(User))).scalar_one()
-        if count > 0:
-            logger.info("Users already exist — skipping admin seeding")
-            return  # users already exist — don't overwrite anything
-
-        admin = User(
-            username=settings.wafpass_admin_username,
-            display_name="Administrator",
-            role=settings.wafpass_admin_role,
-            auth_provider="local",
-            password_hash=hash_password(settings.wafpass_admin_password),
-        )
-        db.add(admin)
-        await db.commit()
-        print(
-            f"[wafpass-server] Seeded admin user '{settings.wafpass_admin_username}' "
-            f"with role '{settings.wafpass_admin_role}'."
-        )
+    await seed_bootstrap_admin_if_empty(logger)
 
     logger.info("=== WAF++ Server ready ===")
 
