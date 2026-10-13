@@ -385,7 +385,10 @@ async def get_validation_certificate_pdf(
 
     envelope = _to_validation_envelope(validation)
     tmp_dir = tempfile.mkdtemp(prefix="wafpass-cert-")
-    pdf_path = Path(tmp_dir) / f"wafpass-certificate-{validation_id[:8]}.pdf"
+    # Keep the temp path independent of any user-provided value to avoid
+    # path-traversal warnings; the friendly name is only used in the
+    # Content-Disposition header returned to the client.
+    pdf_path = Path(tmp_dir) / "wafpass-certificate.pdf"
     generate_validation_certificate(envelope, pdf_path)
 
     return FileResponse(

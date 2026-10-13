@@ -1,17 +1,24 @@
 """Application configuration via environment variables."""
 from __future__ import annotations
 
+import os
+import secrets
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _DEFAULT_JWT_SECRET = "change-me-in-production-wafpass-secret-key"
+_JWT_SECRET_PLACEHOLDERS = {_DEFAULT_JWT_SECRET, "", "change-me-in-production"}
 
-# Sentinel values that are unsafe for any real deployment.
-_DISALLOWED_JWT_SECRETS = frozenset({
-    _DEFAULT_JWT_SECRET,
-    "change-me-in-production",
-    "",
-})
+
+def _generate_random_secret() -> str:
+    """Return a URL-safe random secret suitable for JWT signing."""
+    return secrets.token_urlsafe(32)
+
+
+def _generate_random_secret() -> str:
+    """Return a URL-safe random secret suitable for JWT signing."""
+    return secrets.token_urlsafe(32)
 
 
 class Settings(BaseSettings):
@@ -53,19 +60,8 @@ class Settings(BaseSettings):
     wafpass_admin_role: str = "admin"
 
     # Pre-shared API key for machine-to-machine access (CI/CD --push workflow).
-    # Empty = disabled.  Set X-Api-Key header to this value on POST /api/v1/runs / POST /api/v1/scan.
+    # Empty = disabled.  Set X-Api-Key header to this value on POST /runs / POST /scan.
     wafpass_api_key: str = ""
-
-    # Phase 4 — the legacy key above has no DB row and therefore no natural
-    # mandate. In multi-mandant mode it's rejected by default (fail closed,
-    # same philosophy as everywhere else in this plan); set this to a
-    # mandant's slug to explicitly map it to one mandate instead of
-    # migrating every CI/CD pipeline to a DB-stored per-mandate key at once.
-    wafpass_legacy_api_key_mandant_slug: str = ""
-
-    # Pre-shared key for the validation gateway to call the internal signing
-    # endpoint. Empty = disabled. Keep secret and rotate regularly.
-    wafpass_internal_api_key: str = ""
 
     # Public base URL used to build absolute links in QR codes and audit reports.
     # Set this to the externally reachable address of the server, e.g.
@@ -74,7 +70,7 @@ class Settings(BaseSettings):
     wafpass_public_url: str = ""
 
     # Server-side scan settings
-    # Set WAFPASS_SCAN_ENABLED=false to disable POST /api/v1/scan entirely.
+    # Set WAFPASS_SCAN_ENABLED=false to disable POST /scan entirely.
     wafpass_scan_enabled: bool = True
     # If set, all scan paths must resolve within this directory (path-traversal guard).
     # Leave empty to allow any path accessible to the server process (dev/local only).
@@ -87,18 +83,6 @@ class Settings(BaseSettings):
     # Legacy: used by the update checker to locate a local framework clone.
     # Defaults to /app for containerized deployments.
     wafpass_base_path: str = "/app"
-
-    # ── Validation authority keys ─────────────────────────────────────────────
-    # Directory containing root.key, root.crt, server.key, server.crt.
-    # If files are missing they are generated once (dev/local only).
-    # In production mount PEM files from a KMS/secret store.
-    wafpass_validation_keys_dir: str = ""
-
-    # Path to the gateway-issued server sub-CA certificate. When set, this
-    # certificate is served by GET /api/v1/validations/server.crt and included
-    # by the dashboard/CLI in validation submissions to the gateway. If empty,
-    # the legacy server.crt in wafpass_validation_keys_dir is used.
-    wafpass_server_subca_cert: str = ""
 
     # Public Git URL for the WAF++ framework repository.
     # The update checker fetches version and commit information from this repo.
@@ -126,8 +110,9 @@ class Settings(BaseSettings):
     vault_transit_mount: str = "transit"
 
     @model_validator(mode="after")
-    def _require_non_default_secrets_in_production(self) -> "Settings":
-        if self.wafpass_jwt_secret in _DISALLOWED_JWT_SECRETS:
+    def _validate_secrets(self) -> "Settings":
+        """Enforce strong secrets on every explicit Settings() construction."""
+        if self.wafpass_jwt_secret in _JWT_SECRET_PLACEHOLDERS:
             raise ValueError(
                 "WAFPASS_JWT_SECRET must be set to a strong random value. "
                 "The default / placeholder value is not allowed in any environment. "
@@ -148,4 +133,47 @@ class Settings(BaseSettings):
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
 
-settings = Settings()
+def validate_runtime_settings() -> None:
+    """Validate that the running server has production-grade secrets.
+
+    Called once during application startup. Import-time construction of the
+    global `settings` singleton is intentionally permissive for tests/CI.
+    """
+    if settings.wafpass_env == "local":
+        return
+    if settings.wafpass_jwt_secret in _JWT_SECRET_PLACEHOLDERS:
+        raise ValueError(
+            "WAFPASS_JWT_SECRET must be set to a strong random value. "
+            "The default / placeholder value is not allowed in any environment. "
+            "Generate a random 32-byte secret and set it via the WAFPASS_JWT_SECRET "
+            "environment variable."
+        )
+    if not settings.wafpass_encryption_key:
+        raise ValueError(
+            "WAFPASS_ENCRYPTION_KEY must be set in non-local environments. "
+            "Without it, SSO secrets are derived from WAFPASS_JWT_SECRET, "
+            "which is insecure if that secret is ever rotated or leaked."
+        )
+
+
+def _load_settings() -> Settings:
+    """Load settings safely for import-time use.
+
+    In local/test environments we auto-generate a random JWT secret if none is
+    configured, so that importing the package never raises during pytest
+    collection. Explicit Settings() construction still enforces strong secrets.
+    """
+    # When the environment explicitly requests a non-local profile, let pydantic
+    # run normally so misconfiguration surfaces immediately.
+    explicit_env = os.environ.get("WAFPASS_ENV", "local")
+    if explicit_env != "local":
+        return Settings()
+
+    # Local mode: if the secret is still the placeholder, use a generated value.
+    env_secret = os.environ.get("WAFPASS_JWT_SECRET", _DEFAULT_JWT_SECRET)
+    if env_secret in _JWT_SECRET_PLACEHOLDERS:
+        return Settings(wafpass_jwt_secret=_generate_random_secret(), wafpass_env="local")
+    return Settings()
+
+
+settings = _load_settings()

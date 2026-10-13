@@ -9,8 +9,9 @@ jobs:
     name: Build & publish release
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      id-token: write   # required for PyPI trusted publishing (OIDC)
+      contents: write      # create GitHub releases and tags
+      id-token: write     # PyPI trusted publishing (OIDC)
+      attestations: write  # persist build-provenance attestations (if added later)
 
     # tests/test_mandants.py (and every other DB-gated test) is skipped,
     # not failed, whenever WAFPASS_TEST_DATABASE_URL is unset — which it
