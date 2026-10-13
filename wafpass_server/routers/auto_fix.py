@@ -1,4 +1,4 @@
-"""POST /api/auto-fix — preview or apply automated IaC remediations.
+"""POST /api/v1/auto-fix — preview or apply automated IaC remediations.
 
 This router exposes the wafpass-core auto-fixer to the dashboard so users can
 preview patches, apply them server-side, and roll back from backups.
@@ -22,7 +22,7 @@ from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import Run, User
 
-router = APIRouter(prefix="/api/auto-fix", tags=["auto-fix"])
+router = APIRouter(prefix="/auto-fix", tags=["auto-fix"])
 
 _wafpass_available: bool | None = None
 
@@ -268,7 +268,7 @@ async def _build_diff_preview_from_snapshot(
     )
     if not snapshot:
         reason = (
-            "This run was pushed from a CI/CD pipeline (POST /runs), so the source files were never uploaded."
+            "This run was pushed from a CI/CD pipeline (POST /api/v1/runs), so the source files were never uploaded."
             if run.triggered_by in {"cicd", "ci", "pipeline"}
             else "No source snapshot is stored for this run, so unified diffs cannot be generated in Local preview."
         )

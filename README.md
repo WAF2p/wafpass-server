@@ -8,6 +8,8 @@ REST API for persisting and querying WAF++ PASS scan results. Part of the [WAF++
 | `wafpass-server/` · **this package** | FastAPI + PostgreSQL · stores results, exposes APIs |
 | `wafpass-dashboard/` · React SPA | Consumes this API · visualises compliance posture |
 
+> **BREAKING CHANGE:** All API routes are now versioned under `/api/v1`. Update any direct callers, the dashboard, and the CLI to use paths like `/api/v1/runs`, `/api/v1/auth/login`, and `/api/v1/public/badge/{project}.svg`. `/health`, `/version`, and `/framework-update-info.yml` remain at the root.
+
 ---
 
 ## Quick start
@@ -22,7 +24,7 @@ docker compose up --build
 ```
 
 - API: `http://localhost:8000`
-- Swagger UI: `http://localhost:8000/api/docs`
+- Swagger UI: `http://localhost:8000/api/v1/docs`
 - Dashboard: `http://localhost:3000`
 
 ### Local development
@@ -65,7 +67,7 @@ Copy `.env.example` to `.env` for local development — it contains all variable
 | `WAFPASS_ADMIN_USERNAME` | `admin` | Username for the bootstrap admin user (seeded once on first startup) |
 | `WAFPASS_ADMIN_PASSWORD` | *(empty)* | Password for the bootstrap admin — **set this** to enable auto-seeding |
 | `WAFPASS_ADMIN_ROLE` | `engineer` | Role for the bootstrap admin (`clevel` \| `ciso` \| `architect` \| `engineer`) |
-| `WAFPASS_API_KEY` | *(empty)* | Pre-shared key for CI/CD pushes — pass as `X-Api-Key` header on `POST /runs` / `POST /scan` |
+| `WAFPASS_API_KEY` | *(empty)* | Pre-shared key for CI/CD pushes — pass as `X-Api-Key` header on `POST /api/v1/runs` / `POST /api/v1/scan` |
 
 > **Local dev tip:** When running the dashboard dev server alongside the API, add `http://localhost:5173` to `CORS_ORIGINS` so Vite's dev server can reach the API without CORS errors.
 
@@ -73,7 +75,7 @@ Copy `.env.example` to `.env` for local development — it contains all variable
 
 ## Authentication
 
-All API endpoints require a valid Bearer JWT except `POST /auth/login`, the SSO flow endpoints, and `GET /health`.
+All API endpoints under `/api/v1` require a valid Bearer JWT except `POST /api/v1/auth/login`, the SSO flow endpoints, and `GET /health`.
 
 ### Local accounts
 
@@ -84,12 +86,12 @@ WAFPASS_ADMIN_PASSWORD=changeme123
 WAFPASS_ADMIN_ROLE=admin
 
 # 2. Obtain a token
-TOKEN=$(curl -s -X POST http://localhost:8000/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
   -H "Content-Type: application/json" \
   -d '{"username":"admin","password":"changeme123"}' | jq -r .access_token)
 
 # 3. Use it on any request
-curl http://localhost:8000/runs -H "Authorization: Bearer $TOKEN"
+curl http://localhost:8000/api/v1/runs -H "Authorization: Bearer $TOKEN"
 ```
 
 ### SSO (OIDC / SAML2)
@@ -99,8 +101,8 @@ SSO is configured through the dashboard **SSO Settings** page (admin only) or di
 **OIDC flow:**
 1. Admin configures discovery URL, client ID/secret, redirect URI, and role mapping in SSO Settings.
 2. Users click "Sign in with OIDC" on the login page → redirect to IdP → callback → JWT issued.
-3. `GET /auth/oidc/authorize` initiates the Authorization Code flow. A cryptographically random nonce is embedded in the signed state JWT and also sent to the IdP as the `nonce` parameter so the IdP includes it in the `id_token`.
-4. `GET /auth/oidc/callback` exchanges the code, then:
+3. `GET /api/v1/auth/oidc/authorize` initiates the Authorization Code flow. A cryptographically random nonce is embedded in the signed state JWT and also sent to the IdP as the `nonce` parameter so the IdP includes it in the `id_token`.
+4. `GET /api/v1/auth/oidc/callback` exchanges the code, then:
    - Verifies the state JWT (CSRF protection).
    - Fetches the IdP's public JWKS from `jwks_uri` and verifies the `id_token` signature (RS256/EC).
    - Validates the `aud` claim equals `client_id` and the `nonce` claim matches the state JWT.
@@ -108,9 +110,9 @@ SSO is configured through the dashboard **SSO Settings** page (admin only) or di
 
 **SAML2 flow:**
 1. Admin configures SP/IdP entity IDs, ACS URL, IdP certificate, and role mapping.
-2. Register the SP using the metadata endpoint: `GET /auth/saml/metadata`.
-3. `GET /auth/saml/login` initiates the SP-initiated SSO redirect.
-4. `POST /auth/saml/acs` validates the assertion, provisions the user, issues a JWT, and redirects.
+2. Register the SP using the metadata endpoint: `GET /api/v1/auth/saml/metadata`.
+3. `GET /api/v1/auth/saml/login` initiates the SP-initiated SSO redirect.
+4. `POST /api/v1/auth/saml/acs` validates the assertion, provisions the user, issues a JWT, and redirects.
 
 > SAML2 requires the optional `python3-saml` system dependency: `pip install "wafpass-server[saml]"` (also needs `libxmlsec1` on the host).
 
@@ -120,7 +122,7 @@ Set `WAFPASS_API_KEY=some-secret` on the server and pass it as a header:
 
 ```bash
 wafpass check ./infra --output json | \
-  curl -s -X POST http://localhost:8000/runs \
+  curl -s -X POST http://localhost:8000/api/v1/runs \
        -H "Content-Type: application/json" \
        -H "X-Api-Key: some-secret" \
        -d @-
@@ -130,7 +132,7 @@ To enable dashboard Local preview / auto-fix diffs, add `--upload-source`:
 
 ```bash
 wafpass check ./infra --output json --upload-source | \
-  curl -s -X POST http://localhost:8000/runs \
+  curl -s -X POST http://localhost:8000/api/v1/runs \
        -H "Content-Type: application/json" \
        -H "X-Api-Key: some-secret" \
        -d @-
@@ -143,7 +145,7 @@ wafpass check ./infra --output json --upload-source | \
 | `clevel` | — | Read: all run data, waivers, risks, controls |
 | `ciso` | clevel | + Create/update/delete waivers and risk acceptances |
 | `architect` | ciso | + Create/delete controls catalogue entries, run sandbox |
-| `engineer` | architect | + Trigger scans (`POST /scan`), user management |
+| `engineer` | architect | + Trigger scans (`POST /api/v1/scan`), user management |
 | `admin` | engineer | + User lifecycle, API key management, SSO configuration |
 
 ---
@@ -154,32 +156,32 @@ wafpass check ./infra --output json --upload-source | \
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/auth/login` | None | Exchange credentials for access + refresh tokens |
-| `POST` | `/auth/refresh` | None | Exchange refresh token for new access token |
-| `POST` | `/auth/logout` | None | Revoke a refresh token |
-| `GET` | `/auth/me` | Any | Return current user profile |
-| `GET` | `/auth/users` | engineer | List all users |
-| `POST` | `/auth/users` | engineer | Create a user |
-| `PUT` | `/auth/users/{id}` | engineer | Update user role / password / status |
-| `DELETE` | `/auth/users/{id}` | engineer | Delete a user |
+| `POST` | `/api/v1/auth/login` | None | Exchange credentials for access + refresh tokens |
+| `POST` | `/api/v1/auth/refresh` | None | Exchange refresh token for new access token |
+| `POST` | `/api/v1/auth/logout` | None | Revoke a refresh token |
+| `GET` | `/api/v1/auth/me` | Any | Return current user profile |
+| `GET` | `/api/v1/auth/users` | engineer | List all users |
+| `POST` | `/api/v1/auth/users` | engineer | Create a user |
+| `PUT` | `/api/v1/auth/users/{id}` | engineer | Update user role / password / status |
+| `DELETE` | `/api/v1/auth/users/{id}` | engineer | Delete a user |
 
 ### SSO
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/sso/providers` | None | List enabled SSO providers (for login page) |
-| `GET` | `/sso/config` | admin | List all SSO configurations |
-| `PUT` | `/sso/config/{provider}` | admin | Upsert OIDC or SAML2 configuration |
-| `DELETE` | `/sso/config/{provider}` | admin | Remove an SSO configuration |
-| `GET` | `/sso/group-mappings` | admin | List all group → role mappings |
-| `POST` | `/sso/group-mappings` | admin | Create a group → role mapping |
-| `PUT` | `/sso/group-mappings/{id}` | admin | Update a group → role mapping |
-| `DELETE` | `/sso/group-mappings/{id}` | admin | Delete a group → role mapping |
-| `GET` | `/auth/oidc/authorize` | None | Initiate OIDC Authorization Code flow |
-| `GET` | `/auth/oidc/callback` | None | OIDC callback — issue JWT, redirect to dashboard |
-| `GET` | `/auth/saml/metadata` | None | SP metadata XML (register with IdP) |
-| `GET` | `/auth/saml/login` | None | Initiate SAML2 SP-initiated SSO |
-| `POST` | `/auth/saml/acs` | None | SAML2 Assertion Consumer Service |
+| `GET` | `/api/v1/sso/providers` | None | List enabled SSO providers (for login page) |
+| `GET` | `/api/v1/sso/config` | admin | List all SSO configurations |
+| `PUT` | `/api/v1/sso/config/{provider}` | admin | Upsert OIDC or SAML2 configuration |
+| `DELETE` | `/api/v1/sso/config/{provider}` | admin | Remove an SSO configuration |
+| `GET` | `/api/v1/sso/group-mappings` | admin | List all group → role mappings |
+| `POST` | `/api/v1/sso/group-mappings` | admin | Create a group → role mapping |
+| `PUT` | `/api/v1/sso/group-mappings/{id}` | admin | Update a group → role mapping |
+| `DELETE` | `/api/v1/sso/group-mappings/{id}` | admin | Delete a group → role mapping |
+| `GET` | `/api/v1/auth/oidc/authorize` | None | Initiate OIDC Authorization Code flow |
+| `GET` | `/api/v1/auth/oidc/callback` | None | OIDC callback — issue JWT, redirect to dashboard |
+| `GET` | `/api/v1/auth/saml/metadata` | None | SP metadata XML (register with IdP) |
+| `GET` | `/api/v1/auth/saml/login` | None | Initiate SAML2 SP-initiated SSO |
+| `POST` | `/api/v1/auth/saml/acs` | None | SAML2 Assertion Consumer Service |
 
 ### Health
 
@@ -193,17 +195,17 @@ Ingest and retrieve compliance scan results produced by `wafpass check --output 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/runs` | Ingest a `wafpass-result.json` payload |
-| `GET` | `/runs` | List runs (`limit`, `offset`, `project`) |
-| `GET` | `/runs/{id}` | Full run with findings, controls metadata, secret findings |
-| `GET` | `/runs/{id}/controls` | Controls metadata for a run |
-| `GET` | `/runs/{id}/findings` | Filtered findings (`severity`, `pillar`, `status`) |
+| `POST` | `/api/v1/runs` | Ingest a `wafpass-result.json` payload |
+| `GET` | `/api/v1/runs` | List runs (`limit`, `offset`, `project`) |
+| `GET` | `/api/v1/runs/{id}` | Full run with findings, controls metadata, secret findings |
+| `GET` | `/api/v1/runs/{id}/controls` | Controls metadata for a run |
+| `GET` | `/api/v1/runs/{id}/findings` | Filtered findings (`severity`, `pillar`, `status`) |
 
 **Push a result from CI:**
 
 ```bash
 wafpass check ./infra --output json | \
-  curl -s -X POST http://localhost:8000/runs \
+  curl -s -X POST http://localhost:8000/api/v1/runs \
        -H "Content-Type: application/json" \
        -d @-
 ```
@@ -212,7 +214,7 @@ wafpass check ./infra --output json | \
 
 ```bash
 wafpass check ./infra --output json --upload-source | \
-  curl -s -X POST http://localhost:8000/runs \
+  curl -s -X POST http://localhost:8000/api/v1/runs \
        -H "Content-Type: application/json" \
        -d @-
 ```
@@ -224,7 +226,7 @@ import json, httpx
 
 result = json.loads(open("wafpass-result.json").read())
 result.update({"project": "my-infra", "branch": "main", "git_sha": "abc1234"})
-httpx.post("http://localhost:8000/runs", json=result)
+httpx.post("http://localhost:8000/api/v1/runs", json=result)
 ```
 
 ### Controls catalogue
@@ -233,10 +235,10 @@ Browse and manage WAF++ controls independently of scan runs.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/controls` | Upsert a control (returns `{data, meta}` envelope) |
-| `GET` | `/controls` | List controls (`pillar`, `severity`, `page`, `per_page`) |
-| `GET` | `/controls/{id}` | Get a single control |
-| `DELETE` | `/controls/{id}` | Delete a control |
+| `POST` | `/api/v1/controls` | Upsert a control (returns `{data, meta}` envelope) |
+| `GET` | `/api/v1/controls` | List controls (`pillar`, `severity`, `page`, `per_page`) |
+| `GET` | `/api/v1/controls/{id}` | Get a single control |
+| `DELETE` | `/api/v1/controls/{id}` | Delete a control |
 
 ### Waivers
 
@@ -244,9 +246,9 @@ Team-shared waiver records. Suppresses a control from failing in the dashboard, 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/waivers` | List waivers (`project` filter — returns global + project-specific) |
-| `PUT` | `/waivers/{id}` | Upsert a waiver (idempotent — create or update by control ID) |
-| `DELETE` | `/waivers/{id}` | Delete a waiver |
+| `GET` | `/api/v1/waivers` | List waivers (`project` filter — returns global + project-specific) |
+| `PUT` | `/api/v1/waivers/{id}` | Upsert a waiver (idempotent — create or update by control ID) |
+| `DELETE` | `/api/v1/waivers/{id}` | Delete a waiver |
 
 ```json
 {
@@ -263,9 +265,9 @@ Formally accepted residual risks with approver sign-off, RFC, and traceability l
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/risks` | List risk acceptances |
-| `PUT` | `/risks/{id}` | Upsert a risk acceptance |
-| `DELETE` | `/risks/{id}` | Delete a risk acceptance |
+| `GET` | `/api/v1/risks` | List risk acceptances |
+| `PUT` | `/api/v1/risks/{id}` | Upsert a risk acceptance |
+| `DELETE` | `/api/v1/risks/{id}` | Delete a risk acceptance |
 
 ```json
 {
@@ -288,15 +290,15 @@ Run the real WAF++ engine against arbitrary IaC snippets in-process. The sandbox
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/sandbox` | Evaluate an IaC snippet against all loaded controls |
-| `GET` | `/sandbox/status` | Check engine availability |
+| `POST` | `/api/v1/sandbox` | Evaluate an IaC snippet against all loaded controls |
+| `GET` | `/api/v1/sandbox/status` | Check engine availability |
 
 ```bash
 # Check if engine is ready
-curl http://localhost:8000/sandbox/status
+curl http://localhost:8000/api/v1/sandbox/status
 
 # Run an HCL snippet (Terraform example)
-curl -X POST http://localhost:8000/sandbox \
+curl -X POST http://localhost:8000/api/v1/sandbox \
   -H "Content-Type: application/json" \
   -d '{"hcl": "resource \"aws_s3_bucket\" \"b\" {}", "iac": "terraform"}'
 ```
@@ -309,16 +311,16 @@ Cryptographically-locked, immutable audit packages. Locking freezes a run snapsh
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/evidence` | engineer | Lock a run as an immutable evidence package |
-| `GET` | `/evidence` | clevel | List evidence packages (`project`, `limit`, `offset`) |
-| `GET` | `/evidence/{id}` | clevel | Get evidence metadata |
-| `GET` | `/evidence/{id}/snapshot` | clevel | Return the raw frozen JSON snapshot |
-| `GET` | `/evidence/{id}/report.html` | clevel | Download the locked HTML report |
-| `GET` | `/evidence/{id}/qr.svg` | clevel | QR code SVG linking to the public auditor URL |
-| `DELETE` | `/evidence/{id}` | admin | Delete an evidence package |
-| `GET` | `/evidence/p/{token}` | None | Public auditor view (unauthenticated) |
-| `GET` | `/evidence/p/{token}/qr.svg` | None | Public QR code (for PDF embedding) |
-| `GET` | `/evidence/p/{token}/meta` | None | Public metadata (used by CLI) |
+| `POST` | `/api/v1/evidence` | engineer | Lock a run as an immutable evidence package |
+| `GET` | `/api/v1/evidence` | clevel | List evidence packages (`project`, `limit`, `offset`) |
+| `GET` | `/api/v1/evidence/{id}` | clevel | Get evidence metadata |
+| `GET` | `/api/v1/evidence/{id}/snapshot` | clevel | Return the raw frozen JSON snapshot |
+| `GET` | `/api/v1/evidence/{id}/report.html` | clevel | Download the locked HTML report |
+| `GET` | `/api/v1/evidence/{id}/qr.svg` | clevel | QR code SVG linking to the public auditor URL |
+| `DELETE` | `/api/v1/evidence/{id}` | admin | Delete an evidence package |
+| `GET` | `/api/v1/evidence/p/{token}` | None | Public auditor view (unauthenticated) |
+| `GET` | `/api/v1/evidence/p/{token}/qr.svg` | None | Public QR code (for PDF embedding) |
+| `GET` | `/api/v1/evidence/p/{token}/meta` | None | Public metadata (used by CLI) |
 
 Each locked package includes: title, prepared-by, organization, audit period, regulatory frameworks, SHA-256 hash digest, a public token, and the locking user. The `WAFPASS_PUBLIC_URL` env var controls the base URL embedded in QR codes (defaults to the incoming request's scheme + host).
 
@@ -328,9 +330,9 @@ Maturity tier milestones. Achievements are awarded automatically when a project 
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/achievements` | clevel | List all achievements (`project` filter) |
-| `GET` | `/achievements/{project}` | clevel | List achievements for a project |
-| `GET` | `/public/achievements/{token}` | None | Public cryptographic verification page |
+| `GET` | `/api/v1/achievements` | clevel | List all achievements (`project` filter) |
+| `GET` | `/api/v1/achievements/{project}` | clevel | List achievements for a project |
+| `GET` | `/api/v1/public/achievements/{token}` | None | Public cryptographic verification page |
 
 Tier thresholds:
 
@@ -342,7 +344,7 @@ Tier thresholds:
 | L4 | Optimized | 75 |
 | L5 | Excellence | 90 |
 
-Achievements are evaluated automatically on every `POST /runs`. A new achievement is recorded only when the project reaches a tier level it has not previously held.
+Achievements are evaluated automatically on every `POST /api/v1/runs`. A new achievement is recorded only when the project reaches a tier level it has not previously held.
 
 ### Leaderboard
 
@@ -350,7 +352,7 @@ Hall of Fame — top sovereign and most improved projects across the organisatio
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/leaderboard` | clevel | Top-sovereign and most-improved project rankings |
+| `GET` | `/api/v1/leaderboard` | clevel | Top-sovereign and most-improved project rankings |
 
 Returns two ranked lists:
 - **Top Sovereign** — projects that have held Tier 5 the longest (by `achieved_at` ascending).
@@ -364,10 +366,10 @@ Shields.io-style SVG badges for READMEs and external dashboards. Live badges ref
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/public/badge/{project}.svg` | None | Dynamic SVG badge (latest run → tier label) |
-| `GET` | `/public/badge/{project}/download` | None | Same badge with `Content-Disposition: attachment` |
-| `GET` | `/public/badge/{project}/json` | None | JSON status (shields.io endpoint-badge compatible) |
-| `GET` | `/public/badge/static/{tier_level}.svg` | None | Pre-rendered static badge (1–5) |
+| `GET` | `/api/v1/public/badge/{project}.svg` | None | Dynamic SVG badge (latest run → tier label) |
+| `GET` | `/api/v1/public/badge/{project}/download` | None | Same badge with `Content-Disposition: attachment` |
+| `GET` | `/api/v1/public/badge/{project}/json` | None | JSON status (shields.io endpoint-badge compatible) |
+| `GET` | `/api/v1/public/badge/static/{tier_level}.svg` | None | Pre-rendered static badge (1–5) |
 
 Embed a live badge in your README:
 
@@ -383,10 +385,10 @@ Per-project metadata — display name, owner, team, contact, description, critic
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/projects/passports` | clevel | List all project passports |
-| `GET` | `/projects/{project}/passport` | clevel | Get a project's passport |
-| `PUT` | `/projects/{project}/passport` | architect | Upsert a project passport |
-| `DELETE` | `/projects/{project}/passport` | admin | Delete a project passport |
+| `GET` | `/api/v1/projects/passports` | clevel | List all project passports |
+| `GET` | `/api/v1/projects/{project}/passport` | clevel | Get a project's passport |
+| `PUT` | `/api/v1/projects/{project}/passport` | architect | Upsert a project passport |
+| `DELETE` | `/api/v1/projects/{project}/passport` | admin | Delete a project passport |
 
 ### Findings Comments
 
@@ -394,9 +396,9 @@ Team collaboration on findings — comments, notifications, and remediation trac
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/findings-comments` | clevel | List comments for a run (`finding_id` or `secret_finding_id` filter) |
-| `POST` | `/findings-comments` | clevel | Create a comment on a finding |
-| `GET` | `/findings-comments/count` | clevel | Comment count per finding (aggregated) |
+| `GET` | `/api/v1/findings-comments` | clevel | List comments for a run (`finding_id` or `secret_finding_id` filter) |
+| `POST` | `/api/v1/findings-comments` | clevel | Create a comment on a finding |
+| `GET` | `/api/v1/findings-comments/count` | clevel | Comment count per finding (aggregated) |
 
 ### Widgets
 
@@ -404,18 +406,18 @@ Create and manage dashboards for compliance data display on computers, TVs, or w
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/widgets` | engineer | Create a new widget |
-| `GET` | `/widgets` | engineer | List all widgets (`is_active` filter) |
-| `GET` | `/widgets/{id}` | engineer | Get widget details |
-| `PUT` | `/widgets/{id}` | engineer | Update a widget |
-| `DELETE` | `/widgets/{id}` | admin | Delete a widget |
-| `GET` | `/widget/p/{token}.json` | None | Public JSON data endpoint |
-| `GET` | `/widget/p/{token}/badge.svg` | None | Public SVG badge endpoint |
+| `POST` | `/api/v1/widgets` | engineer | Create a new widget |
+| `GET` | `/api/v1/widgets` | engineer | List all widgets (`is_active` filter) |
+| `GET` | `/api/v1/widgets/{id}` | engineer | Get widget details |
+| `PUT` | `/api/v1/widgets/{id}` | engineer | Update a widget |
+| `DELETE` | `/api/v1/widgets/{id}` | admin | Delete a widget |
+| `GET` | `/api/v1/widget/p/{token}.json` | None | Public JSON data endpoint |
+| `GET` | `/api/v1/widget/p/{token}/badge.svg` | None | Public SVG badge endpoint |
 
 **Create a widget:**
 
 ```bash
-curl -X POST http://localhost:8000/widgets \
+curl -X POST http://localhost:8000/api/v1/widgets \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -435,7 +437,7 @@ curl -X POST http://localhost:8000/widgets \
 **Fetch widget data (public endpoint, no auth required):**
 
 ```bash
-curl http://localhost:8000/widget/p/abc123xyz.json
+curl http://localhost:8000/api/v1/widget/p/abc123xyz.json
 ```
 
 Response:
@@ -534,8 +536,8 @@ environment:
 
 | URL | Description |
 |-----|-------------|
-| `http://localhost:8000/api/docs` | Swagger UI — try requests in browser |
-| `http://localhost:8000/api/redoc` | ReDoc — read-only reference |
+| `http://localhost:8000/api/v1/docs` | Swagger UI — try requests in browser |
+| `http://localhost:8000/api/v1/redoc` | ReDoc — read-only reference |
 
 ---
 
@@ -547,3 +549,12 @@ pytest
 ```
 
 See `TECH.md` for architecture details, database schema, and contribution guidance.
+
+---
+
+## Contributing and security
+
+- `CONTRIBUTING.md` — how to set up local development, run tests, add endpoints, and open pull requests.
+- `CODE_OF_CONDUCT.md` — community standards and enforcement.
+- `SECURITY.md` — supported versions, how to report vulnerabilities, and security-sensitive configuration.
+- `LICENSE` — Apache License 2.0.
