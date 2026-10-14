@@ -109,6 +109,18 @@ class Settings(BaseSettings):
     vault_transit_key: str = "wafpass"
     vault_transit_mount: str = "transit"
 
+    # ── Admin audit log forwarding ────────────────────────────────────────────
+    # Optional remote syslog/SIEM endpoint for security/admin events. Disabled by
+    # default; set WAFPASS_SYSLOG_ENABLED=true and a host to forward every audit
+    # event as it is recorded. Works with any RFC 3164 / RFC 5424 receiver such as
+    # Microsoft Sentinel, Splunk, rsyslog, or logstash.
+    wafpass_syslog_enabled: bool = False
+    wafpass_syslog_host: str = ""
+    wafpass_syslog_port: int = 514
+    wafpass_syslog_protocol: str = "udp"  # udp | tcp
+    wafpass_syslog_format: str = "rfc5424"  # rfc3164 | rfc5424
+    wafpass_syslog_facility: int = 13  # 13 = log audit, standard for security events
+
     @model_validator(mode="after")
     def _validate_secrets(self) -> "Settings":
         """Enforce strong secrets on every explicit Settings() construction."""

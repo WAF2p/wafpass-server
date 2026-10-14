@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
@@ -29,8 +29,9 @@ from wafpass_server.auth.deps import AuthContext, get_auth_context, get_current_
 from wafpass_server.database import get_db, get_owner_connection
 from wafpass_server.db_migrations.activate_multi_mandant_ddl import ALL_TENANT_TABLES, apply_multi_mandant_ddl
 from wafpass_server.mandant_ancestry import recompute_mandant_ancestry
-from wafpass_server.models import InstanceSetting, Mandant, User
-from wafpass_server.schemas import Envelope
+from wafpass_server.models import InstanceSetting, Mandant, SyslogConfig, User, UserAuditLog
+from wafpass_server.schemas import AdminLogOut, Envelope, SyslogConfigIn, SyslogConfigOut, SyslogTestOut
+from wafpass_server.syslog import get_syslog_config, test_syslog_config, update_syslog_config
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -198,6 +199,101 @@ async def require_holding_admin(
     if not auth.is_holding_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, detail="holding_admin role required.")
     return auth
+
+
+@router.get("/logs", response_model=Envelope[list[AdminLogOut]])
+async def list_admin_logs(
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    _: Annotated[AuthContext, Depends(require_admin_or_holding_admin)],
+    limit: int = Query(default=500, le=2000),
+    action: str | None = Query(default=None),
+) -> Envelope[list[AdminLogOut]]:
+    """Server-side admin/security audit log.
+
+    Requires admin or holding_admin. Returns the most recent events from
+    `user_audit_logs` with actor username resolved from the users table.
+    """
+    stmt = (
+        select(UserAuditLog, User.username.label("actor_username"))
+        .outerjoin(User, UserAuditLog.actor_id == User.id)
+        .order_by(UserAuditLog.timestamp.desc())
+        .limit(limit)
+    )
+    if action:
+        stmt = stmt.where(UserAuditLog.action == action)
+
+    result = await db.execute(stmt)
+    out: list[AdminLogOut] = []
+    for row in result.mappings().all():
+        log = row["UserAuditLog"]
+        out.append(
+            AdminLogOut(
+                id=log.id,
+                actor_id=log.actor_id,
+                actor_username=row["actor_username"],
+                action=log.action,
+                detail=log.detail or {},
+                ip=log.ip,
+                mandant_id=log.mandant_id,
+                timestamp=log.timestamp,
+            )
+        )
+    return Envelope(data=out)
+
+
+@router.get("/syslog-config", response_model=Envelope[SyslogConfigOut])
+async def read_syslog_config(
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    _: Annotated[AuthContext, Depends(require_admin_or_holding_admin)],
+) -> Envelope[SyslogConfigOut]:
+    """Read the singleton syslog/SIEM forwarding configuration."""
+    config = await get_syslog_config(db)
+    return Envelope(data=SyslogConfigOut.model_validate(config))
+
+
+@router.put("/syslog-config", response_model=Envelope[SyslogConfigOut])
+async def write_syslog_config(
+    payload: SyslogConfigIn,
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    user: Annotated[User, Depends(require_admin_or_holding_admin)],
+) -> Envelope[SyslogConfigOut]:
+    """Update the singleton syslog/SIEM forwarding configuration."""
+    data = payload.model_dump()
+    # Map the schema field name back to the underlying column name.
+    if "syslog_format" in data:
+        data["format"] = data.pop("syslog_format")
+    config = await update_syslog_config(db, data)
+    db.add(
+        UserAuditLog(
+            actor_id=user.id,
+            action="syslog_config_changed",
+            detail={"enabled": config.enabled, "host": config.host, "protocol": config.protocol},
+            ip="",
+            mandant_id=user.mandant_id,
+        )
+    )
+    await db.commit()
+    return Envelope(data=SyslogConfigOut.model_validate(config))
+
+
+@router.post("/syslog-config/test", response_model=Envelope[SyslogTestOut])
+async def send_syslog_test(
+    db: Annotated[AsyncSession, Depends(get_scoped_db)],
+    user: Annotated[User, Depends(require_admin_or_holding_admin)],
+) -> Envelope[SyslogTestOut]:
+    """Send a single test syslog message using the stored configuration."""
+    success, message = await test_syslog_config(db)
+    db.add(
+        UserAuditLog(
+            actor_id=user.id,
+            action="syslog_test",
+            detail={"success": success, "message": message},
+            ip="",
+            mandant_id=user.mandant_id,
+        )
+    )
+    await db.commit()
+    return Envelope(data=SyslogTestOut(success=success, message=message))
 
 
 async def require_switch_role(

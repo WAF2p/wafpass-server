@@ -77,3 +77,8 @@ packages = ["wafpass_server"]
 testpaths = ["tests"]
 addopts = "-v"
 asyncio_mode = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest-asyncio>=1.4.0",
+]

@@ -418,6 +418,119 @@ class LocalAttestationOut(BaseModel):
     mandant_id: str | None = None
 
 
+# ── Admin / security audit log schemas ───────────────────────────────────────
+
+
+class AdminLogOut(BaseModel):
+    id: uuid.UUID
+    actor_id: uuid.UUID | None
+    actor_username: str | None
+    action: str
+    detail: dict[str, Any]
+    ip: str
+    mandant_id: uuid.UUID | None
+    timestamp: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ── Syslog / SIEM forwarder schemas ───────────────────────────────────────────
+
+
+SYSLOG_ACTIONS: list[str] = [
+    "login_success",
+    "login_failed",
+    "logout",
+    "user_invited",
+    "user_role_changed",
+    "user_deactivated",
+    "user_deleted",
+    "project_created",
+    "project_updated",
+    "project_deleted",
+    "mandant_created",
+    "mandant_updated",
+    "mandant_deleted",
+    "api_key_rotated",
+    "sso_config_changed",
+    "syslog_config_changed",
+    "rule_created",
+    "rule_updated",
+    "rule_deleted",
+    "waiver_created",
+    "waiver_approved",
+    "waiver_rejected",
+    "waiver_deleted",
+    "finding_suppressed",
+    "finding_comment_created",
+    "control_created",
+    "control_updated",
+    "control_deleted",
+]
+
+
+class SyslogConfigOut(BaseModel):
+    """Singleton syslog forwarder configuration."""
+
+    enabled: bool
+    host: str
+    port: int
+    protocol: str  # udp | tcp
+    syslog_format: str  # rfc3164 | rfc5424
+    facility: int
+    tls_enabled: bool
+    program_tag: str
+    severity_overrides: dict[str, int]
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SyslogConfigIn(BaseModel):
+    """Payload accepted by PUT /api/v1/admin/syslog-config."""
+
+    enabled: bool
+    host: str = Field(min_length=1, max_length=253)
+    port: int = Field(ge=1, le=65535)
+    protocol: str = Field(default="udp")
+    syslog_format: str = Field(default="rfc5424")
+    facility: int = Field(default=13, ge=0, le=23)
+    tls_enabled: bool = Field(default=False)
+    program_tag: str = Field(default="wafpass-admin", min_length=1, max_length=48)
+    severity_overrides: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("protocol")
+    @classmethod
+    def _validate_protocol(cls, value: str) -> str:
+        if value not in {"udp", "tcp"}:
+            raise ValueError("protocol must be 'udp' or 'tcp'")
+        return value
+
+    @field_validator("syslog_format")
+    @classmethod
+    def _validate_format(cls, value: str) -> str:
+        if value not in {"rfc3164", "rfc5424"}:
+            raise ValueError("format must be 'rfc3164' or 'rfc5424'")
+        return value
+
+    @field_validator("severity_overrides")
+    @classmethod
+    def _validate_severity_overrides(cls, overrides: dict[str, int]) -> dict[str, int]:
+        for action, severity in overrides.items():
+            if action not in SYSLOG_ACTIONS:
+                raise ValueError(f"unknown action in severity_overrides: {action}")
+            if not 0 <= severity <= 7:
+                raise ValueError(f"severity for {action} must be between 0 and 7")
+        return overrides
+
+
+class SyslogTestOut(BaseModel):
+    """Response schema for a test syslog packet."""
+
+    success: bool
+    message: str
+
+
 # ── Compliance audit event schemas ───────────────────────────────────────────
 
 

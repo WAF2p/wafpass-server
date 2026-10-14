@@ -28,6 +28,7 @@ from wafpass_server.auth.providers.local import authenticate_local, hash_passwor
 from wafpass_server.config import settings
 from wafpass_server.database import get_db
 from wafpass_server.models import ApiKey, ApiKeyUsageLog, Mandant, RefreshToken, User, UserAuditLog, UserGroup
+from wafpass_server.syslog import emit_admin_audit_event
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -53,6 +54,13 @@ async def _audit(
     mandant_id: uuid.UUID | None = None,
 ) -> None:
     db.add(UserAuditLog(actor_id=actor_id, action=action, detail=detail, ip=ip, mandant_id=mandant_id))
+    emit_admin_audit_event(
+        action=action,
+        detail=detail,
+        ip=ip,
+        mandant_id=str(mandant_id) if mandant_id else None,
+        actor_id=str(actor_id) if actor_id else None,
+    )
     # caller is responsible for commit
 
 

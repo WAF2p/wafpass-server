@@ -120,6 +120,29 @@ class UserAuditLog(Base):
     mandant_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("mandants.id"), nullable=True)
 
 
+class SyslogConfig(Base):
+    """Singleton instance-wide syslog/SIEM forwarding configuration.
+
+    One row (id=1) controls how admin/security audit events are forwarded
+    to remote syslog receivers. The UI reads and writes this row; the
+    forwarder reads it on every emit.
+    """
+    __tablename__ = "syslog_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    host: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    port: Mapped[int] = mapped_column(Integer, nullable=False, default=514)
+    protocol: Mapped[str] = mapped_column(Text, nullable=False, default="udp")   # udp | tcp
+    syslog_format: Mapped[str] = mapped_column("format", Text, nullable=False, default="rfc5424")  # rfc3164 | rfc5424
+    facility: Mapped[int] = mapped_column(Integer, nullable=False, default=13)     # 13 = log audit
+    tls_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    program_tag: Mapped[str] = mapped_column(Text, nullable=False, default="wafpass-admin")
+    severity_overrides: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class RefreshToken(Base):
     """Hashed refresh token records — rotated on every /api/v1/auth/refresh call.
 
